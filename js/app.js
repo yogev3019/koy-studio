@@ -86,7 +86,9 @@
   const C = {
     kind: S.prefs.kind || 'story',
     design: Object.assign({ story: 'window', post: 'band' }, S.prefs.design),
-    photo: null, x: 0, y: 0, zoom: 1,
+    photo: null, x: 0, y: 0, zoom: 1, mx: 0, my: 0, pendingBias: false,
+    logoPos: S.prefs.logoPos || 'bottom',
+    theme: Object.assign({}, S.prefs.theme), // one color per design, e.g. { 'story:full': 'cocoa' }
     chip: '', custom: '',
     slots: ['', '', '', '', ''],
   };
@@ -99,15 +101,22 @@
     if (C.kind === 'post' && C.design.post === 'window') return '';
     return (C.custom.trim() || C.chip || '').trim();
   }
+  const designKey = (kind, design) => (kind === 'slots' ? 'slots:main' : `${kind}:${design}`);
+  const themeOf = (kind, design) => { const k = designKey(kind, design); return C.theme[k] || KOY.DEFAULT_THEME[k]; };
   function state() {
-    return { kind: C.kind, design: C.design[C.kind], photo: C.photo, x: C.x, y: C.y, zoom: C.zoom, caption: caption(), slots: C.slots };
+    return { kind: C.kind, design: C.design[C.kind], photo: C.photo, x: C.x, y: C.y, zoom: C.zoom, caption: caption(), slots: C.slots, logoPos: C.logoPos, theme: themeOf(C.kind, C.design[C.kind]) };
   }
   let raf = 0;
   function draw() {
     cancelAnimationFrame(raf);
     raf = requestAnimationFrame(() => {
       lastLayout = KOY.render(preview, state());
-      if (lastLayout && lastLayout.offset) { C.x = lastLayout.offset.x; C.y = lastLayout.offset.y; }
+      if (lastLayout && lastLayout.offset) {
+        const o = lastLayout.offset;
+        C.x = o.x; C.y = o.y; C.mx = o.mx || 0; C.my = o.my || 0;
+        // new portrait photo: start a little higher, since faces usually sit in the top part
+        if (C.pendingBias && C.photo) { C.pendingBias = false; if (C.my > 0) { C.y = C.my * 0.55; draw(); return; } }
+      }
       updateSave();
     });
   }
@@ -119,16 +128,44 @@
       const b = document.createElement('button');
       b.className = 'design' + (C.design[C.kind] === id ? ' on' : '');
       const full = document.createElement('canvas');
-      KOY.render(full, { kind: C.kind, design: id, photo: C.photo, x: C.x, y: C.y, zoom: C.zoom, caption: '' });
+      KOY.render(full, { kind: C.kind, design: id, photo: C.photo, x: C.x, y: C.y, zoom: C.zoom, caption: '', logoPos: C.logoPos, theme: themeOf(C.kind, id) });
       const mini = document.createElement('canvas');
       mini.width = 216; mini.height = Math.round(216 * full.height / full.width);
       mini.getContext('2d').drawImage(full, 0, 0, mini.width, mini.height);
       b.appendChild(mini);
       const s = document.createElement('span'); s.textContent = label; b.appendChild(s);
-      b.onclick = () => { C.design[C.kind] = id; S.prefs.design = C.design; save(); renderDesigns(); renderTextCard(); draw(); };
+      b.onclick = () => { C.design[C.kind] = id; S.prefs.design = C.design; save(); renderDesigns(); renderTextCard(); updateLogoRow(); renderSwatches(); draw(); };
       box.appendChild(b);
     }
   }
+  // Color choice from the approved palette; remembered separately for each design
+  function renderSwatches() {
+    const box = $('#swatches'); box.innerHTML = '';
+    const cur = themeOf(C.kind, C.design[C.kind]);
+    $('#colorHint').textContent = C.kind === 'story' && C.design.story === 'full'
+      ? 'הצבע של הפס התחתון, מאחורי הלוגו. תמונה בהירה? נסי צבע כהה.'
+      : 'תמונה בהירה? נסי רקע כהה, כדי שהתמונה תבלוט.';
+    for (const [id, t] of Object.entries(KOY.THEMES)) {
+      const b = document.createElement('button');
+      b.className = 'swatch' + (id === cur ? ' on' : '');
+      b.dataset.theme = id;
+      b.setAttribute('aria-pressed', id === cur ? 'true' : 'false');
+      const dot = document.createElement('i');
+      dot.style.background = t.bg; dot.style.color = t.text; dot.textContent = 'א';
+      const s = document.createElement('span'); s.textContent = t.name;
+      b.append(dot, s);
+      b.onclick = () => {
+        C.theme[designKey(C.kind, C.design[C.kind])] = id; S.prefs.theme = C.theme; save();
+        renderSwatches(); renderDesigns(); draw();
+      };
+      box.appendChild(b);
+    }
+  }
+  function updateLogoRow() {
+    $('#logoPosRow').classList.toggle('hidden', !(C.kind === 'story' && C.design.story === 'full'));
+    $$('#logoPosSeg button').forEach(b => b.classList.toggle('on', b.dataset.pos === C.logoPos));
+  }
+  $$('#logoPosSeg button').forEach(b => b.onclick = () => { C.logoPos = b.dataset.pos; S.prefs.logoPos = C.logoPos; save(); updateLogoRow(); draw(); });
   function renderChips() {
     const box = $('#chips'); box.innerHTML = '';
     const all = [['', 'בלי טקסט'], ...CHIPS.map(c => [c, c])];
@@ -167,7 +204,7 @@
     $('#designCard').hidden = isSlots;
     $('#slotsCard').hidden = !isSlots;
     $('#consentCard').hidden = isSlots;
-    renderDesigns(); renderTextCard(); draw();
+    renderDesigns(); renderTextCard(); updateLogoRow(); renderSwatches(); draw();
   }
   $$('#kindSeg button').forEach(b => b.onclick = () => setKind(b.dataset.kind));
 
@@ -175,21 +212,50 @@
     const f = e.target.files && e.target.files[0];
     if (!f) return;
     try {
-      C.photo = await KOY.loadPhoto(f); C.x = 0; C.y = 0; C.zoom = 1; $('#zoom').value = 1;
+      C.photo = await KOY.loadPhoto(f); C.x = 0; C.y = 0; C.zoom = 1; $('#zoom').value = 1; C.pendingBias = true;
       $('#consent').checked = false; $('#clientSel').value = '';
       setKind(C.kind === 'slots' ? 'story' : C.kind);
-      toast('התמונה נטענה ✨');
+      showDragOverlay();
       $('#previewWrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (err) { toast('לא הצלחתי לפתוח את התמונה. נסי תמונה אחרת.'); }
     e.target.value = '';
   });
   $('#changePhoto').onclick = () => $('#fileInput').click();
   $('#zoom').oninput = e => { C.zoom = +e.target.value; draw(); };
+
+  // overlay hint: shown when a photo is added, hidden on first touch
+  let overlayT;
+  function showDragOverlay() {
+    const o = $('#dragOverlay'); o.classList.remove('hidden'); o.style.opacity = '1';
+    clearTimeout(overlayT); overlayT = setTimeout(hideDragOverlay, 3500);
+  }
+  function hideDragOverlay() { const o = $('#dragOverlay'); o.style.opacity = '0'; setTimeout(() => o.classList.add('hidden'), 400); }
+
+  // arrow pad: tap = small step, hold = keeps moving
+  const STEP = 24; let edgeToastAt = 0, holdT = null;
+  function nudge(dir) {
+    if (!C.photo) return;
+    const bx = C.x, by = C.y;
+    if (dir === 'up') C.y -= STEP; if (dir === 'down') C.y += STEP;
+    if (dir === 'left') C.x -= STEP; if (dir === 'right') C.x += STEP;
+    C.x = Math.max(-C.mx, Math.min(C.mx, C.x)); C.y = Math.max(-C.my, Math.min(C.my, C.y));
+    if (C.x === bx && C.y === by && Date.now() - edgeToastAt > 2500) {
+      edgeToastAt = Date.now();
+      toast('התמונה כבר בקצה. אפשר להגדיל או להקטין אותה בסרגל "גודל"');
+    }
+    draw();
+  }
+  $$('[data-move]').forEach(b => {
+    const stop = () => { clearInterval(holdT); holdT = null; };
+    b.addEventListener('pointerdown', e => { e.preventDefault(); nudge(b.dataset.move); stop(); holdT = setInterval(() => nudge(b.dataset.move), 90); });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => b.addEventListener(ev, stop));
+  });
+  $('#centerBtn').onclick = () => { C.x = 0; C.y = 0; draw(); };
   $('#customText').oninput = e => { C.custom = e.target.value; renderChips(); draw(); };
 
   // drag + pinch on the preview
   const ptrs = new Map(); let pinch0 = null;
-  preview.addEventListener('pointerdown', e => { if (!C.photo || C.kind === 'slots') return; preview.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch0 = { d: Math.hypot(a.x - b.x, a.y - b.y), z: C.zoom }; } });
+  preview.addEventListener('pointerdown', e => { if (!C.photo || C.kind === 'slots') return; hideDragOverlay(); preview.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch0 = { d: Math.hypot(a.x - b.x, a.y - b.y), z: C.zoom }; } });
   preview.addEventListener('pointermove', e => {
     if (!ptrs.has(e.pointerId)) return;
     const prev = ptrs.get(e.pointerId); const cur = { x: e.clientX, y: e.clientY }; ptrs.set(e.pointerId, cur);
@@ -236,6 +302,9 @@
     toast(out.length ? 'מילאתי לפי ימי העבודה ביומן. אפשר לערוך.' : 'אין ימי עבודה ב-7 הימים הקרובים');
   };
 
+  // Step 1: show the finished image full screen. The file is prepared here, so the share sheet
+  // opens instantly when she confirms (phones only allow sharing right after a tap).
+  let finalOut = null;
   $('#saveBtn').onclick = async () => {
     if ($('#saveBtn').disabled) return;
     const out = document.createElement('canvas');
@@ -243,18 +312,28 @@
     const blob = await new Promise(r => out.toBlob(r, 'image/jpeg', 0.92));
     const now = new Date();
     const name = `KOY_${C.kind}_${keyOf(now)}_${pad(now.getHours())}${pad(now.getMinutes())}.jpg`;
-    const file = new File([blob], name, { type: 'image/jpeg' });
+    finalOut = { file: new File([blob], name, { type: 'image/jpeg' }), url: URL.createObjectURL(blob), name };
+    $('#finalImg').src = finalOut.url;
+    $('#finalPreview').classList.remove('hidden'); document.body.style.overflow = 'hidden';
+  };
+  function closeFinal() {
+    $('#finalPreview').classList.add('hidden'); document.body.style.overflow = '';
+    if (finalOut) { const u = finalOut.url; setTimeout(() => URL.revokeObjectURL(u), 4000); finalOut = null; }
+  }
+  $('#finalBack').onclick = closeFinal;
+  // Step 2: save / share
+  $('#finalSave').onclick = async () => {
+    const f = finalOut; if (!f) return;
     try {
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], title: 'KOY COSMETICS' });
-        toast('מוכן! עכשיו אפשר להעלות לאינסטגרם ✨');
+      if (navigator.canShare && navigator.canShare({ files: [f.file] })) {
+        await navigator.share({ files: [f.file], title: 'KOY COSMETICS' });
+        closeFinal(); toast('מוכן! עכשיו אפשר להעלות לאינסטגרם ✨');
         return;
       }
     } catch (err) { if (err && err.name === 'AbortError') return; }
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+    const a = document.createElement('a'); a.href = f.url; a.download = f.name;
     document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-    toast('נשמר בטלפון ✨ עכשיו אפשר להעלות לאינסטגרם');
+    closeFinal(); toast('נשמר בטלפון ✨ עכשיו אפשר להעלות לאינסטגרם');
   };
 
   // =====================================================================
@@ -470,7 +549,10 @@
     renderChips(); renderSlotRows(); refreshClientSelect(); setKind(C.kind); banners();
   });
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+    // when a new version is published, reload once so the installed app picks it up
+    const hadController = !!navigator.serviceWorker.controller; let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !reloaded) { reloaded = true; location.reload(); } });
+    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').then(r => r.update()).catch(() => {}));
   }
   window.__koy = { S: () => S, C };   // for automated tests only
 })();

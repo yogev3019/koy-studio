@@ -46,21 +46,54 @@
     </label>
 
     <div id="previewWrap" class="previewWrap">
-      <canvas id="preview" width="1080" height="1920" dir="rtl" aria-label="תצוגה מקדימה"></canvas>
-      <p id="dragHint" class="hint hidden">אפשר לגרור את התמונה ולהגדיל עם שתי אצבעות</p>
+      <div class="previewBox">
+        <canvas id="preview" width="1080" height="1920" dir="rtl" aria-label="תצוגה מקדימה"></canvas>
+        <div id="dragOverlay" class="dragOverlay hidden">
+          <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg>
+          <span>גררי את התמונה כדי למקם אותה</span>
+        </div>
+      </div>
+      <p id="dragHint" class="hint hidden">אפשר לגרור את התמונה עם האצבע, או להשתמש בחצים למטה</p>
     </div>
 
     <div class="card" id="photoCard" hidden>
-      <div class="rowline">
-        <label for="zoom" class="lbl">הגדלה</label>
-        <input type="range" id="zoom" min="1" max="3" step="0.01" value="1">
+      <h3>מיקום התמונה</h3>
+      <div class="posRow">
+        <div class="pad" aria-label="הזזת התמונה">
+          <button class="padBtn up" data-move="up" aria-label="להזיז למעלה">▲</button>
+          <button class="padBtn left" data-move="left" aria-label="להזיז שמאלה">◀</button>
+          <button class="padBtn mid" id="centerBtn" aria-label="למרכז">מרכז</button>
+          <button class="padBtn right" data-move="right" aria-label="להזיז ימינה">▶</button>
+          <button class="padBtn down" data-move="down" aria-label="להזיז למטה">▼</button>
+        </div>
+        <p class="fine padHelp">החצים מזיזים את התמונה בתוך המסגרת.<br>למשל: אם המצח נחתך, לחצי ▼ כדי להוריד את התמונה.</p>
       </div>
+      <div class="rowline">
+        <label for="zoom" class="lbl">גודל</label>
+        <span class="zl">קטן</span>
+        <input type="range" id="zoom" min="0.6" max="3" step="0.01" value="1" dir="ltr">
+        <span class="zl">גדול</span>
+      </div>
+      <p class="fine">מתחת לאמצע: כל התמונה נכנסת בלי חיתוך.</p>
       <button id="changePhoto" class="btn ghost small">החלפת תמונה</button>
     </div>
 
     <div class="card" id="designCard">
       <h3>עיצוב</h3>
       <div class="designs" id="designs"></div>
+      <div id="logoPosRow" class="logoPosRow hidden">
+        <span class="lbl">הלוגו</span>
+        <div class="seg small" id="logoPosSeg">
+          <button data-pos="bottom" class="on">למטה</button>
+          <button data-pos="top">למעלה</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="colorCard">
+      <h3>צבעים</h3>
+      <div class="swatches" id="swatches"></div>
+      <p class="fine" id="colorHint">תמונה בהירה? נסי רקע כהה, כדי שהתמונה תבלוט.</p>
     </div>
 
     <div class="card" id="textCard">
@@ -83,7 +116,7 @@
       <label class="check"><input type="checkbox" id="consent"><span>הלקוחה אישרה לפרסם את התמונה</span></label>
     </div>
 
-    <button id="saveBtn" class="btn primary big">שמירה ושיתוף</button>
+    <button id="saveBtn" class="btn primary big">תצוגה לפני שמירה</button>
     <p id="saveHint" class="fine center"></p>
   </section>
 
@@ -131,7 +164,7 @@
     </div>
     <div class="card">
       <h3>על האפליקציה</h3>
-      <p class="fine">KOY Studio · גרסה 1.0<br>שום מידע לא נשלח לשום מקום. הכול נשאר אצלך בטלפון.</p>
+      <p class="fine">KOY Studio · גרסה 1.1<br>שום מידע לא נשלח לשום מקום. הכול נשאר אצלך בטלפון.</p>
       <button id="wipeBtn" class="btn danger">מחיקת כל הנתונים</button>
     </div>
   </section>
@@ -151,6 +184,14 @@
 
 <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
   <div class="sheet" id="sheet"></div>
+</div>
+<div id="finalPreview" class="final hidden" role="dialog" aria-modal="true" aria-label="תצוגה לפני שמירה">
+  <p class="finalTitle">ככה זה ייראה</p>
+  <div class="finalImgBox"><img id="finalImg" alt="התמונה המוכנה"></div>
+  <div class="finalActions">
+    <button id="finalSave" class="btn primary">שמירה ושיתוף</button>
+    <button id="finalBack" class="btn ghost light">חזרה לעריכה</button>
+  </div>
 </div>
 <div id="toast" class="toast" role="status"></div>
 

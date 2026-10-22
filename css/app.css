@@ -202,6 +202,19 @@ textarea.field { min-height: 90px; resize: vertical; }
 }
 .bottom button.on { color: var(--primary); background: var(--surface); }
 
+/* full-screen preview before saving */
+.final {
+  position: fixed; inset: 0; z-index: 100; background: #2A1811;
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  padding: calc(14px + env(safe-area-inset-top, 0px)) 16px calc(16px + var(--safe-b));
+}
+.finalTitle { color: var(--bg); font-weight: 600; font-size: 20px; margin: 0; }
+.finalImgBox { flex: 1; min-height: 0; width: 100%; display: flex; align-items: center; justify-content: center; }
+#finalImg { max-width: 100%; max-height: 100%; border-radius: 14px; box-shadow: 0 10px 40px rgba(0, 0, 0, .45); }
+.finalActions { display: flex; gap: 10px; width: 100%; max-width: 520px; }
+.finalActions .btn { flex: 1; margin: 0; }
+.btn.light { color: var(--bg); border-color: rgba(255, 248, 241, .55); background: transparent; }
+
 /* modal sheet */
 .modal { position: fixed; inset: 0; background: rgba(58, 34, 25, .35); z-index: 50; display: flex; align-items: flex-end; justify-content: center; }
 .sheet {
@@ -225,3 +238,37 @@ textarea.field { min-height: 90px; resize: vertical; }
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 #weekLabel { direction: ltr; unicode-bidi: isolate; font-family: 'Josefin Sans', sans-serif; }
+
+/* v1.1 — photo positioning */
+.previewBox { position: relative; display: inline-block; max-width: 100%; }
+.dragOverlay {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  background: rgba(58, 34, 25, .78); color: var(--bg); border-radius: 18px; padding: 14px 18px;
+  display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center;
+  font-size: 17px; font-weight: 700; pointer-events: none; transition: opacity .4s; width: 72%;
+}
+.posRow { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; }
+.pad { display: grid; grid-template-columns: repeat(3, 54px); grid-template-rows: repeat(3, 54px); gap: 6px; direction: ltr; flex: none; }
+.padBtn { border: 1.5px solid var(--accent); background: var(--bg); color: var(--primary); border-radius: 14px; font-size: 20px; font-weight: 700; cursor: pointer; touch-action: manipulation; }
+.padBtn:active { background: var(--surface); }
+.padBtn.up { grid-column: 2; grid-row: 1; }
+.padBtn.left { grid-column: 1; grid-row: 2; }
+.padBtn.mid { grid-column: 2; grid-row: 2; font-size: 14px; background: var(--surface); }
+.padBtn.right { grid-column: 3; grid-row: 2; }
+.padBtn.down { grid-column: 2; grid-row: 3; }
+.padHelp { flex: 1; margin: 0; }
+.zl { font-size: 14px; opacity: .65; }
+.swatches { display: flex; gap: 8px; margin-bottom: 8px; }
+.swatch {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px;
+  background: none; border: 0; padding: 4px 0; cursor: pointer; font-size: 16px;
+}
+.swatch i {
+  width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center;
+  font-style: normal; font-weight: 600; font-size: 22px;
+  border: 1.5px solid rgba(58, 34, 25, .18);
+}
+.swatch.on i { box-shadow: 0 0 0 3px var(--white), 0 0 0 5.5px var(--primary); }
+.swatch.on span { font-weight: 700; color: var(--primary); }
+.logoPosRow { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.logoPosRow .seg { flex: 1; margin: 0; }
