@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#F5DCCB">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="KOY Studio">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>KOY Studio</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="assets/icon-192.png">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="stylesheet" href="fonts/fonts.css">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header class="top">
+  <img src="assets/logo.svg" class="hlogo" alt="KOY COSMETICS">
+  <button id="btnSettings" class="icon-btn" aria-label="הגדרות">
+    <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+  </button>
+</header>
+
+<main>
+  <!-- CREATE -->
+  <section id="tab-create" class="tab active">
+    <div id="installBanner" class="banner hidden"></div>
+    <div id="backupBanner" class="banner hidden"></div>
+    <h1 class="hello">היי קרן <span class="sunDot"></span></h1>
+    <p class="sub">מה יוצרים היום?</p>
+    <div class="seg" id="kindSeg">
+      <button data-kind="story" class="on">סטורי</button>
+      <button data-kind="post">פוסט</button>
+      <button data-kind="slots">תורים פנויים</button>
+    </div>
+
+    <label class="upload" id="uploadBox">
+      <input type="file" accept="image/*" id="fileInput" hidden>
+      <span class="upIcon">
+        <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+      </span>
+      <b>צילום או בחירת תמונה</b>
+      <small>מהמצלמה או מהגלריה</small>
+    </label>
+
+    <div id="previewWrap" class="previewWrap">
+      <canvas id="preview" width="1080" height="1920" dir="rtl" aria-label="תצוגה מקדימה"></canvas>
+      <p id="dragHint" class="hint hidden">אפשר לגרור את התמונה ולהגדיל עם שתי אצבעות</p>
+    </div>
+
+    <div class="card" id="photoCard" hidden>
+      <div class="rowline">
+        <label for="zoom" class="lbl">הגדלה</label>
+        <input type="range" id="zoom" min="1" max="3" step="0.01" value="1">
+      </div>
+      <button id="changePhoto" class="btn ghost small">החלפת תמונה</button>
+    </div>
+
+    <div class="card" id="designCard">
+      <h3>עיצוב</h3>
+      <div class="designs" id="designs"></div>
+    </div>
+
+    <div class="card" id="textCard">
+      <h3>טקסט <span class="opt">(לא חובה)</span></h3>
+      <div class="chips" id="chips"></div>
+      <input id="customText" class="field" maxlength="40" placeholder="או כתבי טקסט משלך">
+      <p id="noTextNote" class="fine hidden">בעיצוב הזה אין טקסט, רק התמונה והלוגו.</p>
+    </div>
+
+    <div class="card" id="slotsCard" hidden>
+      <h3>התורים הפנויים</h3>
+      <p class="fine">עד 5 שורות. כל שורה, למשל: ראשון · 18:00</p>
+      <div id="slotRows"></div>
+      <button id="fillFromCal" class="btn ghost">מילוי אוטומטי מהיומן</button>
+    </div>
+
+    <div class="card" id="consentCard">
+      <h3>הלקוחה <span class="opt">(לא חובה)</span></h3>
+      <select id="clientSel" class="field"></select>
+      <label class="check"><input type="checkbox" id="consent"><span>הלקוחה אישרה לפרסם את התמונה</span></label>
+    </div>
+
+    <button id="saveBtn" class="btn primary big">שמירה ושיתוף</button>
+    <p id="saveHint" class="fine center"></p>
+  </section>
+
+  <!-- CALENDAR -->
+  <section id="tab-calendar" class="tab">
+    <h2>יומן</h2>
+    <div class="weeknav">
+      <button id="prevWeek" class="icon-btn" aria-label="השבוע הקודם">›</button>
+      <b id="weekLabel"></b>
+      <button id="nextWeek" class="icon-btn" aria-label="השבוע הבא">‹</button>
+    </div>
+    <button id="todayBtn" class="btn ghost small center-block">חזרה להיום</button>
+    <div id="days"></div>
+  </section>
+
+  <!-- CLIENTS -->
+  <section id="tab-clients" class="tab">
+    <h2>לקוחות</h2>
+    <div class="searchRow">
+      <input id="clientSearch" class="field" placeholder="חיפוש לפי שם או טלפון" type="search">
+      <button id="addClient" class="btn primary">+ לקוחה</button>
+    </div>
+    <div id="clientList"></div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section id="tab-settings" class="tab">
+    <h2>הגדרות</h2>
+    <div class="card">
+      <h3>שעות עבודה קבועות</h3>
+      <p class="fine">ככה היומן יודע מתי את עובדת. יום מסוים אפשר לסמן כחופש ישירות ביומן.</p>
+      <div id="schedRows"></div>
+    </div>
+    <div class="card">
+      <h3>התקנה בטלפון</h3>
+      <p id="installText" class="fine"></p>
+      <button id="installBtn" class="btn primary hidden">התקנה במסך הבית</button>
+    </div>
+    <div class="card">
+      <h3>גיבוי</h3>
+      <p class="fine">הלקוחות והיומן שמורים רק בטלפון הזה. כדאי לשמור גיבוי פעם בחודש, ולשלוח אותו לעצמך בוואטסאפ או במייל.</p>
+      <button id="exportBtn" class="btn primary">שמירת גיבוי</button>
+      <label class="btn ghost">שחזור מגיבוי<input type="file" id="importInput" accept=".json,application/json" hidden></label>
+      <p id="lastBackup" class="fine"></p>
+    </div>
+    <div class="card">
+      <h3>על האפליקציה</h3>
+      <p class="fine">KOY Studio · גרסה 1.0<br>שום מידע לא נשלח לשום מקום. הכול נשאר אצלך בטלפון.</p>
+      <button id="wipeBtn" class="btn danger">מחיקת כל הנתונים</button>
+    </div>
+  </section>
+</main>
+
+<nav class="bottom">
+  <button data-tab="create" class="on">
+    <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"/></svg>
+    <span>יצירה</span></button>
+  <button data-tab="calendar">
+    <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>
+    <span>יומן</span></button>
+  <button data-tab="clients">
+    <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c2 .7 3.2 2.5 3.5 5.2"/></svg>
+    <span>לקוחות</span></button>
+</nav>
+
+<div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="sheet" id="sheet"></div>
+</div>
+<div id="toast" class="toast" role="status"></div>
+
+<script src="js/render.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
