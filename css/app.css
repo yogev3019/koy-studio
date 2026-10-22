@@ -65,6 +65,7 @@ h3 { font-size: 20px; font-weight: 700; margin: 0 0 10px; }
   padding: 12px 6px; font-size: 18px; font-weight: 600; cursor: pointer; color: var(--text);
 }
 .seg button.on { background: var(--primary); color: var(--bg); }
+#kindSeg button { flex: 1 1 auto; font-size: 17px; padding: 12px 4px; white-space: nowrap; }
 
 /* upload */
 .upload {
@@ -104,6 +105,13 @@ input[type=range] { flex: 1; accent-color: var(--primary); height: 32px; }
 }
 .design canvas { width: 100%; border-radius: 8px; display: block; }
 .design.on { border-color: var(--primary); background: var(--surface); }
+.designs.three { gap: 8px; }
+.designs.three .design { padding: 6px; font-size: 15px; }
+
+/* video options */
+.endRow span { flex: 1; }
+.endRow small { font-size: 14px; opacity: .7; }
+#endThumb { width: 54px; height: 96px; border-radius: 8px; box-shadow: 0 2px 8px rgba(58, 34, 25, .18); flex: none; transition: opacity .2s; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .chip {
@@ -210,7 +218,12 @@ textarea.field { min-height: 90px; resize: vertical; }
 }
 .finalTitle { color: var(--bg); font-weight: 600; font-size: 20px; margin: 0; }
 .finalImgBox { flex: 1; min-height: 0; width: 100%; display: flex; align-items: center; justify-content: center; }
-#finalImg { max-width: 100%; max-height: 100%; border-radius: 14px; box-shadow: 0 10px 40px rgba(0, 0, 0, .45); }
+#finalImg, #finalCanvas, #finalVideo { max-width: 100%; max-height: 100%; border-radius: 14px; box-shadow: 0 10px 40px rgba(0, 0, 0, .45); }
+#finalVideo { background: #000; }
+.finalProgress { width: 100%; max-width: 520px; display: flex; align-items: center; gap: 12px; color: var(--bg); font-family: 'Josefin Sans', sans-serif; font-size: 17px; }
+.finalProgress .bar { flex: 1; height: 10px; border-radius: 99px; background: rgba(255, 248, 241, .18); overflow: hidden; }
+.finalProgress .bar i { display: block; height: 100%; width: 0; border-radius: 99px; background: linear-gradient(90deg, #D9A066, #F5DCCB); transition: width .25s; }
+.finalNote { margin: 0; max-width: 520px; text-align: center; color: rgba(255, 248, 241, .85); font-size: 16px; line-height: 1.4; }
 .finalActions { display: flex; gap: 10px; width: 100%; max-width: 520px; }
 .finalActions .btn { flex: 1; margin: 0; }
 .btn.light { color: var(--bg); border-color: rgba(255, 248, 241, .55); background: transparent; }

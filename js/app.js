@@ -76,6 +76,7 @@
     if (name === 'clients') renderClients();
     if (name === 'settings') renderSettings();
     if (name === 'create') refreshClientSelect();
+    ensureLoop();
   }
   $$('.bottom button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
   $('#btnSettings').onclick = () => showTab('settings');
@@ -85,66 +86,98 @@
   // =====================================================================
   const C = {
     kind: S.prefs.kind || 'story',
-    design: Object.assign({ story: 'window', post: 'band' }, S.prefs.design),
-    photo: null, x: 0, y: 0, zoom: 1, mx: 0, my: 0, pendingBias: false,
-    logoPos: S.prefs.logoPos || 'bottom',
+    design: Object.assign({ story: 'window', post: 'band', video: 'full' }, S.prefs.design),
+    photo: null, video: null, x: 0, y: 0, zoom: 1, mx: 0, my: 0, pendingBias: false,
+    // logo position per design, e.g. { 'story:full': 'bottom', 'video:clean': 'top' } (version 1.1 kept a single value)
+    logoPos: typeof S.prefs.logoPos === 'string' ? { 'story:full': S.prefs.logoPos } : Object.assign({}, S.prefs.logoPos),
     theme: Object.assign({}, S.prefs.theme), // one color per design, e.g. { 'story:full': 'cocoa' }
+    dest: S.prefs.dest || 'story', endCard: S.prefs.endCard !== false, keepSound: S.prefs.keepSound !== false,
     chip: '', custom: '',
     slots: ['', '', '', '', ''],
   };
   const CHIPS = ['זוהר לפני האירוע ✨', 'עוד לקוחה זוהרת 🤎', 'שיזוף בהתזה', 'לקביעת תור בהודעה'];
-  const DESIGNS = { story: [['window', 'חלון'], ['full', 'מסך מלא']], post: [['band', 'פס תחתון'], ['window', 'חלון']] };
+  const DESIGNS = {
+    story: [['window', 'חלון'], ['full', 'מסך מלא']],
+    post: [['band', 'פס תחתון'], ['window', 'חלון']],
+    video: [['full', 'מסך מלא'], ['window', 'חלון'], ['clean', 'נקי']],
+  };
+  const END_SEC = 2; // video end card
+  const CAN_VIDEO = !!KOYVideo.pickMime();
   const preview = $('#preview');
   let lastLayout = null;
 
+  const media = () => (C.kind === 'video' ? C.video : C.kind === 'slots' ? null : C.photo);
+  const fmtSec = s => { const t = Math.round(s); return `${Math.floor(t / 60)}:${pad(t % 60)}`; };
   function caption() {
     if (C.kind === 'post' && C.design.post === 'window') return '';
     return (C.custom.trim() || C.chip || '').trim();
   }
   const designKey = (kind, design) => (kind === 'slots' ? 'slots:main' : `${kind}:${design}`);
+  const curKey = () => designKey(C.kind, C.design[C.kind]);
   const themeOf = (kind, design) => { const k = designKey(kind, design); return C.theme[k] || KOY.DEFAULT_THEME[k]; };
+  const logoPosOf = key => C.logoPos[key] || KOY.DEFAULT_LOGO_POS[key] || 'bottom';
   function state() {
-    return { kind: C.kind, design: C.design[C.kind], photo: C.photo, x: C.x, y: C.y, zoom: C.zoom, caption: caption(), slots: C.slots, logoPos: C.logoPos, theme: themeOf(C.kind, C.design[C.kind]) };
+    return {
+      kind: C.kind, design: C.design[C.kind], photo: media(), x: C.x, y: C.y, zoom: C.zoom, caption: caption(), slots: C.slots,
+      logoPos: logoPosOf(curKey()), theme: themeOf(C.kind, C.design[C.kind]), dest: C.dest,
+    };
+  }
+  function renderNow() {
+    lastLayout = KOY.render(preview, state());
+    if (lastLayout && lastLayout.offset) {
+      const o = lastLayout.offset;
+      C.x = o.x; C.y = o.y; C.mx = o.mx || 0; C.my = o.my || 0;
+      // new portrait photo or video: start a little higher, since faces usually sit in the top part
+      if (C.pendingBias && media()) { C.pendingBias = false; if (C.my > 0) { C.y = C.my * 0.55; renderNow(); } }
+    }
   }
   let raf = 0;
   function draw() {
     cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(() => {
-      lastLayout = KOY.render(preview, state());
-      if (lastLayout && lastLayout.offset) {
-        const o = lastLayout.offset;
-        C.x = o.x; C.y = o.y; C.mx = o.mx || 0; C.my = o.my || 0;
-        // new portrait photo: start a little higher, since faces usually sit in the top part
-        if (C.pendingBias && C.photo) { C.pendingBias = false; if (C.my > 0) { C.y = C.my * 0.55; draw(); return; } }
-      }
-      updateSave();
-    });
+    raf = requestAnimationFrame(() => { renderNow(); updateSave(); });
   }
+
+  // video: the preview keeps playing inside the design while the editor is on screen
+  let vraf = 0, finalMode = null;
+  const editorLive = () => C.kind === 'video' && !!C.video && !finalMode && !document.hidden && $('#tab-create').classList.contains('active');
+  function vtick() { vraf = 0; if (!editorLive()) return; renderNow(); vraf = requestAnimationFrame(vtick); }
+  function ensureLoop() {
+    if (!C.video) return;
+    if (editorLive()) {
+      C.video.loop = true; C.video.muted = true;
+      if (C.video.paused) C.video.play().catch(() => {});
+      if (!vraf) vraf = requestAnimationFrame(vtick);
+    } else if (!finalMode && !C.video.paused) C.video.pause();
+  }
+  document.addEventListener('visibilitychange', ensureLoop);
 
   function renderDesigns() {
     const box = $('#designs'); box.innerHTML = '';
     if (C.kind === 'slots') return;
+    box.classList.toggle('three', DESIGNS[C.kind].length === 3);
     for (const [id, label] of DESIGNS[C.kind]) {
       const b = document.createElement('button');
       b.className = 'design' + (C.design[C.kind] === id ? ' on' : '');
+      b.dataset.design = id;
       const full = document.createElement('canvas');
-      KOY.render(full, { kind: C.kind, design: id, photo: C.photo, x: C.x, y: C.y, zoom: C.zoom, caption: '', logoPos: C.logoPos, theme: themeOf(C.kind, id) });
+      KOY.render(full, { kind: C.kind, design: id, photo: media(), x: C.x, y: C.y, zoom: C.zoom, caption: '', logoPos: logoPosOf(designKey(C.kind, id)), theme: themeOf(C.kind, id), dest: C.dest });
       const mini = document.createElement('canvas');
       mini.width = 216; mini.height = Math.round(216 * full.height / full.width);
       mini.getContext('2d').drawImage(full, 0, 0, mini.width, mini.height);
       b.appendChild(mini);
       const s = document.createElement('span'); s.textContent = label; b.appendChild(s);
-      b.onclick = () => { C.design[C.kind] = id; S.prefs.design = C.design; save(); renderDesigns(); renderTextCard(); updateLogoRow(); renderSwatches(); draw(); };
+      b.onclick = () => { C.design[C.kind] = id; S.prefs.design = C.design; save(); renderDesigns(); renderTextCard(); updateLogoRow(); renderSwatches(); renderVideoCard(); draw(); };
       box.appendChild(b);
     }
   }
   // Color choice from the approved palette; remembered separately for each design
   function renderSwatches() {
     const box = $('#swatches'); box.innerHTML = '';
-    const cur = themeOf(C.kind, C.design[C.kind]);
-    $('#colorHint').textContent = C.kind === 'story' && C.design.story === 'full'
-      ? 'הצבע של הפס התחתון, מאחורי הלוגו. תמונה בהירה? נסי צבע כהה.'
-      : 'תמונה בהירה? נסי רקע כהה, כדי שהתמונה תבלוט.';
+    const cur = themeOf(C.kind, C.design[C.kind]), k = curKey();
+    const light = C.kind === 'video' ? 'סרטון בהיר' : 'תמונה בהירה';
+    $('#colorHint').textContent = k === 'story:full' || k === 'video:full'
+      ? `הצבע של הפס התחתון, מאחורי הלוגו. ${light}? נסי צבע כהה.`
+      : k === 'video:clean' ? 'הצבע של התג עם הלוגו ושל הטקסט.' : `${light}? נסי רקע כהה, כדי שהיא תבלוט.`;
     for (const [id, t] of Object.entries(KOY.THEMES)) {
       const b = document.createElement('button');
       b.className = 'swatch' + (id === cur ? ' on' : '');
@@ -155,17 +188,37 @@
       const s = document.createElement('span'); s.textContent = t.name;
       b.append(dot, s);
       b.onclick = () => {
-        C.theme[designKey(C.kind, C.design[C.kind])] = id; S.prefs.theme = C.theme; save();
-        renderSwatches(); renderDesigns(); draw();
+        C.theme[curKey()] = id; S.prefs.theme = C.theme; save();
+        renderSwatches(); renderDesigns(); renderVideoCard(); draw();
       };
       box.appendChild(b);
     }
   }
   function updateLogoRow() {
-    $('#logoPosRow').classList.toggle('hidden', !(C.kind === 'story' && C.design.story === 'full'));
-    $$('#logoPosSeg button').forEach(b => b.classList.toggle('on', b.dataset.pos === C.logoPos));
+    const k = curKey();
+    $('#logoPosRow').classList.toggle('hidden', !(k in KOY.DEFAULT_LOGO_POS));
+    $$('#logoPosSeg button').forEach(b => b.classList.toggle('on', b.dataset.pos === logoPosOf(k)));
   }
-  $$('#logoPosSeg button').forEach(b => b.onclick = () => { C.logoPos = b.dataset.pos; S.prefs.logoPos = C.logoPos; save(); updateLogoRow(); draw(); });
+  $$('#logoPosSeg button').forEach(b => b.onclick = () => { C.logoPos[curKey()] = b.dataset.pos; S.prefs.logoPos = C.logoPos; save(); updateLogoRow(); renderDesigns(); draw(); });
+
+  // video options: where it goes (story / reel), end card, sound
+  function renderVideoCard() {
+    if (C.kind !== 'video') return;
+    $$('#destSeg button').forEach(b => b.classList.toggle('on', b.dataset.dest === C.dest));
+    $('#endCard').checked = C.endCard; $('#keepSound').checked = C.keepSound;
+    const full = document.createElement('canvas');
+    KOY.render(full, Object.assign(state(), { photo: null, endAlpha: 1 }));
+    const t = $('#endThumb'); t.getContext('2d').drawImage(full, 0, 0, t.width, t.height);
+    t.style.opacity = C.endCard ? '1' : '.35';
+    const v = C.video;
+    $('#videoLen').textContent = v
+      ? `אורך הסרטון: ${fmtSec(KOYVideo.limitOf(v))}${isFinite(v.duration) && v.duration > KOYVideo.MAX_SEC ? ' (רק 90 השניות הראשונות)' : ''}`
+      : 'עד 90 שניות. סרטון ארוך יותר אפשר לקצר קודם בגלריה.';
+  }
+  $$('#destSeg button').forEach(b => b.onclick = () => { C.dest = b.dataset.dest; S.prefs.dest = C.dest; save(); renderVideoCard(); renderDesigns(); draw(); });
+  $('#endCard').onchange = e => { C.endCard = e.target.checked; S.prefs.endCard = C.endCard; save(); renderVideoCard(); };
+  $('#keepSound').onchange = e => { C.keepSound = e.target.checked; S.prefs.keepSound = C.keepSound; save(); };
+
   function renderChips() {
     const box = $('#chips'); box.innerHTML = '';
     const all = [['', 'בלי טקסט'], ...CHIPS.map(c => [c, c])];
@@ -173,7 +226,7 @@
       const b = document.createElement('button');
       b.className = 'chip' + ((C.chip === val && !C.custom) ? ' on' : '');
       b.textContent = label;
-      b.onclick = () => { C.chip = val; C.custom = ''; $('#customText').value = ''; renderChips(); draw(); };
+      b.onclick = () => { C.chip = val; C.custom = ''; $('#customText').value = ''; renderChips(); renderVideoCard(); draw(); };
       box.appendChild(b);
     }
   }
@@ -194,36 +247,65 @@
       box.appendChild(inp);
     });
   }
+
+  // photo and video keep their own position and size
+  const POS = { photo: { x: 0, y: 0, zoom: 1 }, video: { x: 0, y: 0, zoom: 1 } };
+  let posGroup = C.kind === 'video' ? 'video' : 'photo';
+  function switchPosGroup(kind) {
+    const g = kind === 'video' ? 'video' : 'photo';
+    if (g === posGroup) return;
+    POS[posGroup] = { x: C.x, y: C.y, zoom: C.zoom };
+    posGroup = g; Object.assign(C, POS[g]); $('#zoom').value = C.zoom;
+  }
   function setKind(k) {
+    switchPosGroup(k);
     C.kind = k; S.prefs.kind = k; save();
     $$('#kindSeg button').forEach(b => b.classList.toggle('on', b.dataset.kind === k));
-    const isSlots = k === 'slots';
-    $('#uploadBox').hidden = isSlots || !!C.photo;
-    $('#photoCard').hidden = isSlots || !C.photo;
-    $('#dragHint').classList.toggle('hidden', isSlots || !C.photo);
+    const isSlots = k === 'slots', isVid = k === 'video', m = media();
+    $('#uploadBox').hidden = isSlots || !!m;
+    $('#photoCard').hidden = isSlots || !m;
+    $('#dragHint').classList.toggle('hidden', isSlots || !m);
     $('#designCard').hidden = isSlots;
+    $('#videoCard').hidden = !isVid;
     $('#slotsCard').hidden = !isSlots;
     $('#consentCard').hidden = isSlots;
-    renderDesigns(); renderTextCard(); updateLogoRow(); renderSwatches(); draw();
+    $('#fileInput').accept = isVid ? 'video/*' : 'image/*';
+    $('#upTitle').textContent = isVid ? 'בחירת סרטון' : 'צילום או בחירת תמונה';
+    $('#upSub').textContent = isVid ? 'מהגלריה או מהמצלמה, עד 90 שניות' : 'מהמצלמה או מהגלריה';
+    $('#posTitle').textContent = isVid ? 'מיקום הסרטון' : 'מיקום התמונה';
+    $('#changePhoto').textContent = isVid ? 'החלפת סרטון' : 'החלפת תמונה';
+    $('#dragHint').textContent = `אפשר לגרור את ${isVid ? 'הסרטון' : 'התמונה'} עם האצבע, או להשתמש בחצים למטה`;
+    renderDesigns(); renderTextCard(); updateLogoRow(); renderSwatches(); renderVideoCard(); draw(); ensureLoop();
   }
   $$('#kindSeg button').forEach(b => b.onclick = () => setKind(b.dataset.kind));
 
   $('#fileInput').addEventListener('change', async e => {
     const f = e.target.files && e.target.files[0];
     if (!f) return;
+    const isVid = KOYVideo.isVideoFile(f);
     try {
-      C.photo = await KOY.loadPhoto(f); C.x = 0; C.y = 0; C.zoom = 1; $('#zoom').value = 1; C.pendingBias = true;
+      if (isVid) {
+        const v = await KOYVideo.loadVideo(f);
+        if (C.video) KOYVideo.unload(C.video);
+        C.video = v;
+        if (isFinite(v.duration) && v.duration > KOYVideo.MAX_SEC) toast('הסרטון ארוך מ-90 שניות, אז ייכנסו 90 השניות הראשונות');
+      } else {
+        C.photo = await KOY.loadPhoto(f);
+      }
+      const target = isVid ? 'video' : (C.kind === 'video' || C.kind === 'slots' ? 'story' : C.kind);
+      switchPosGroup(target);
+      C.x = 0; C.y = 0; C.zoom = 1; $('#zoom').value = 1; C.pendingBias = true;
       $('#consent').checked = false; $('#clientSel').value = '';
-      setKind(C.kind === 'slots' ? 'story' : C.kind);
+      setKind(target);
       showDragOverlay();
       $('#previewWrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    } catch (err) { toast('לא הצלחתי לפתוח את התמונה. נסי תמונה אחרת.'); }
+    } catch (err) { toast(isVid ? 'לא הצלחתי לפתוח את הסרטון. נסי סרטון אחר.' : 'לא הצלחתי לפתוח את התמונה. נסי תמונה אחרת.'); }
     e.target.value = '';
   });
   $('#changePhoto').onclick = () => $('#fileInput').click();
   $('#zoom').oninput = e => { C.zoom = +e.target.value; draw(); };
 
-  // overlay hint: shown when a photo is added, hidden on first touch
+  // overlay hint: shown when a photo or video is added, hidden on first touch
   let overlayT;
   function showDragOverlay() {
     const o = $('#dragOverlay'); o.classList.remove('hidden'); o.style.opacity = '1';
@@ -234,14 +316,14 @@
   // arrow pad: tap = small step, hold = keeps moving
   const STEP = 24; let edgeToastAt = 0, holdT = null;
   function nudge(dir) {
-    if (!C.photo) return;
+    if (!media()) return;
     const bx = C.x, by = C.y;
     if (dir === 'up') C.y -= STEP; if (dir === 'down') C.y += STEP;
     if (dir === 'left') C.x -= STEP; if (dir === 'right') C.x += STEP;
     C.x = Math.max(-C.mx, Math.min(C.mx, C.x)); C.y = Math.max(-C.my, Math.min(C.my, C.y));
     if (C.x === bx && C.y === by && Date.now() - edgeToastAt > 2500) {
       edgeToastAt = Date.now();
-      toast('התמונה כבר בקצה. אפשר להגדיל או להקטין אותה בסרגל "גודל"');
+      toast(`${C.kind === 'video' ? 'הסרטון' : 'התמונה'} כבר בקצה. אפשר להגדיל או להקטין בסרגל "גודל"`);
     }
     draw();
   }
@@ -251,17 +333,17 @@
     ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => b.addEventListener(ev, stop));
   });
   $('#centerBtn').onclick = () => { C.x = 0; C.y = 0; draw(); };
-  $('#customText').oninput = e => { C.custom = e.target.value; renderChips(); draw(); };
+  $('#customText').oninput = e => { C.custom = e.target.value; renderChips(); renderVideoCard(); draw(); };
 
   // drag + pinch on the preview
   const ptrs = new Map(); let pinch0 = null;
-  preview.addEventListener('pointerdown', e => { if (!C.photo || C.kind === 'slots') return; hideDragOverlay(); preview.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch0 = { d: Math.hypot(a.x - b.x, a.y - b.y), z: C.zoom }; } });
+  preview.addEventListener('pointerdown', e => { if (!media() || C.kind === 'slots') return; hideDragOverlay(); preview.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch0 = { d: Math.hypot(a.x - b.x, a.y - b.y), z: C.zoom }; } });
   preview.addEventListener('pointermove', e => {
     if (!ptrs.has(e.pointerId)) return;
     const prev = ptrs.get(e.pointerId); const cur = { x: e.clientX, y: e.clientY }; ptrs.set(e.pointerId, cur);
     const k = preview.width / preview.clientWidth;
     if (ptrs.size === 1) { C.x += (cur.x - prev.x) * k; C.y += (cur.y - prev.y) * k; draw(); }
-    else if (ptrs.size === 2 && pinch0) { const [a, b] = [...ptrs.values()]; const d = Math.hypot(a.x - b.x, a.y - b.y); C.zoom = Math.max(1, Math.min(3, pinch0.z * d / pinch0.d)); $('#zoom').value = C.zoom; draw(); }
+    else if (ptrs.size === 2 && pinch0) { const [a, b] = [...ptrs.values()]; const d = Math.hypot(a.x - b.x, a.y - b.y); C.zoom = Math.max(0.6, Math.min(3, pinch0.z * d / pinch0.d)); $('#zoom').value = C.zoom; draw(); }
   });
   const endPtr = e => { ptrs.delete(e.pointerId); if (ptrs.size < 2) pinch0 = null; };
   preview.addEventListener('pointerup', endPtr); preview.addEventListener('pointercancel', endPtr);
@@ -280,15 +362,17 @@
   };
 
   function updateSave() {
-    const btn = $('#saveBtn'), hint = $('#saveHint');
+    const btn = $('#saveBtn'), hint = $('#saveHint'), isVid = C.kind === 'video';
     if (C.kind === 'slots') {
       const any = C.slots.some(s => s.trim());
       btn.disabled = !any; hint.textContent = any ? '' : 'כתבי לפחות תור פנוי אחד, או לחצי "מילוי אוטומטי מהיומן"';
       return;
     }
-    if (!C.photo) { btn.disabled = true; hint.textContent = 'קודם בוחרים תמונה'; return; }
+    if (!media()) { btn.disabled = true; hint.textContent = isVid ? 'קודם בוחרים סרטון' : 'קודם בוחרים תמונה'; return; }
+    if (isVid && !CAN_VIDEO) { btn.disabled = true; hint.textContent = 'בטלפון הזה אי אפשר ליצור סרטון. כדאי לעדכן את הדפדפן או את המערכת.'; return; }
     if (!$('#consent').checked) { btn.disabled = true; hint.textContent = 'כדי לשמור, סמני שהלקוחה אישרה לפרסם'; return; }
-    btn.disabled = false; hint.textContent = 'התמונה נשמרת בטלפון שלך, ומשם מעלים לאינסטגרם';
+    btn.disabled = false;
+    hint.textContent = isVid ? 'הסרטון נשמר בטלפון שלך, ומשם מעלים לסטורי או לריל' : 'התמונה נשמרת בטלפון שלך, ומשם מעלים לאינסטגרם';
   }
 
   $('#fillFromCal').onclick = () => {
@@ -302,11 +386,43 @@
     toast(out.length ? 'מילאתי לפי ימי העבודה ביומן. אפשר לערוך.' : 'אין ימי עבודה ב-7 הימים הקרובים');
   };
 
-  // Step 1: show the finished image full screen. The file is prepared here, so the share sheet
-  // opens instantly when she confirms (phones only allow sharing right after a tap).
-  let finalOut = null;
+  // ---- preview before saving ----
+  // photo: the finished image. video: it plays inside the design, then "create video" records it,
+  // then the finished video plays and can be saved. Files are prepared before the save tap, so the
+  // share sheet opens instantly (phones only allow sharing right after a tap).
+  let finalOut = null, recJob = null, fLoop = 0, fEndAt = 0;
+  function setFinalMode(mode) {
+    finalMode = mode;
+    const show = (sel, on) => { $(sel).hidden = !on; };
+    show('#finalImg', mode === 'photo');
+    show('#finalCanvas', mode === 'ready' || mode === 'recording');
+    show('#finalVideo', mode === 'done');
+    show('#finalProgress', mode === 'recording');
+    show('#finalSave', mode === 'photo' || mode === 'done');
+    show('#finalMake', mode === 'ready');
+    show('#finalCancel', mode === 'recording');
+    show('#finalBack', mode !== 'recording');
+    $('#finalTitle').textContent = mode === 'recording' ? 'מכינה את הסרטון…' : mode === 'done' ? 'הסרטון מוכן ✓' : 'ככה זה ייראה';
+  }
+  function finalNote(text) { $('#finalNote').hidden = !text; $('#finalNote').textContent = text || ''; }
+  function openFinal(mode) {
+    $('#finalPreview').classList.remove('hidden'); document.body.style.overflow = 'hidden';
+    setFinalMode(mode); ensureLoop();
+  }
+  function closeFinal() {
+    if (recJob) { const j = recJob; recJob = null; j.cancel(); }
+    cancelAnimationFrame(fLoop); fLoop = 0; fEndAt = 0;
+    const fv = $('#finalVideo'); if (fv.getAttribute('src')) { fv.pause(); fv.removeAttribute('src'); fv.load(); }
+    $('#finalPreview').classList.add('hidden'); document.body.style.overflow = '';
+    if (finalOut) { const u = finalOut.url; setTimeout(() => URL.revokeObjectURL(u), 4000); finalOut = null; }
+    finalMode = null;
+    ensureLoop();
+  }
+  $('#finalBack').onclick = closeFinal;
+
   $('#saveBtn').onclick = async () => {
     if ($('#saveBtn').disabled) return;
+    if (C.kind === 'video') { openVideoPreview(); return; }
     const out = document.createElement('canvas');
     KOY.render(out, state());
     const blob = await new Promise(r => out.toBlob(r, 'image/jpeg', 0.92));
@@ -314,26 +430,84 @@
     const name = `KOY_${C.kind}_${keyOf(now)}_${pad(now.getHours())}${pad(now.getMinutes())}.jpg`;
     finalOut = { file: new File([blob], name, { type: 'image/jpeg' }), url: URL.createObjectURL(blob), name };
     $('#finalImg').src = finalOut.url;
-    $('#finalPreview').classList.remove('hidden'); document.body.style.overflow = 'hidden';
+    finalNote('');
+    openFinal('photo');
   };
-  function closeFinal() {
-    $('#finalPreview').classList.add('hidden'); document.body.style.overflow = '';
-    if (finalOut) { const u = finalOut.url; setTimeout(() => URL.revokeObjectURL(u), 4000); finalOut = null; }
+
+  const readyNote = () => `הסרטון יהיה באורך ${fmtSec(KOYVideo.limitOf(C.video) + (C.endCard ? END_SEC : 0))}. ההכנה לוקחת בערך אותו זמן, והמסך צריך להישאר פתוח עד הסוף.`;
+  function openVideoPreview() {
+    openFinal('ready');
+    finalNote(readyNote());
+    startFinalLoop();
   }
-  $('#finalBack').onclick = closeFinal;
-  // Step 2: save / share
+  // plays the video in the design, then the end card, then again from the start
+  function startFinalLoop() {
+    const v = C.video, cv = $('#finalCanvas'), lim = KOYVideo.limitOf(v);
+    v.loop = false; v.muted = true; v.currentTime = 0; v.play().catch(() => {}); fEndAt = 0;
+    const step = () => {
+      fLoop = 0;
+      if (finalMode !== 'ready') return;
+      let a = 0;
+      if (fEndAt) {
+        const t = (performance.now() - fEndAt) / 1000;
+        if (t >= END_SEC) { fEndAt = 0; v.currentTime = 0; v.play().catch(() => {}); } else a = Math.min(1, t / 0.4);
+      } else if (v.ended || v.currentTime >= lim - 0.03) {
+        if (C.endCard) { v.pause(); fEndAt = performance.now(); } else { v.currentTime = 0; v.play().catch(() => {}); }
+      }
+      KOY.render(cv, Object.assign(state(), { endAlpha: a }));
+      fLoop = requestAnimationFrame(step);
+    };
+    step();
+  }
+  $('#finalMake').onclick = () => {
+    if (finalMode !== 'ready') return;
+    cancelAnimationFrame(fLoop); fLoop = 0; fEndAt = 0;
+    setFinalMode('recording');
+    finalNote('המסך צריך להישאר פתוח עד הסוף.');
+    const cv = $('#finalCanvas'), st0 = state();
+    $('#finalBar').style.width = '0%'; $('#finalProgText').textContent = '0%';
+    const job = KOYVideo.record({
+      canvas: cv, video: C.video, keepAudio: C.keepSound, endSec: C.endCard ? END_SEC : 0,
+      draw: a => KOY.render(cv, Object.assign({}, st0, { endAlpha: a })),
+      onProgress: p => { const pc = Math.round(p * 100); $('#finalBar').style.width = pc + '%'; $('#finalProgText').textContent = pc + '%'; },
+    });
+    recJob = job;
+    job.promise.then(res => {
+      if (job !== recJob) return;
+      recJob = null;
+      const now = new Date();
+      const name = `KOY_video_${keyOf(now)}_${pad(now.getHours())}${pad(now.getMinutes())}.${res.ext}`;
+      finalOut = { file: new File([res.blob], name, { type: res.type }), url: URL.createObjectURL(res.blob), name, video: true };
+      const fv = $('#finalVideo'); fv.src = finalOut.url; fv.muted = true; fv.play().catch(() => {});
+      setFinalMode('done');
+      finalNote(res.ext === 'mp4'
+        ? (C.keepSound ? 'הסרטון מתנגן כאן בלי קול. אפשר ללחוץ עליו כדי לשמוע.' : '')
+        : 'שימי לב: הטלפון שמר את הסרטון בפורמט WebM. אם אינסטגרם לא מקבל אותו, כדאי לעדכן את הדפדפן.');
+    }).catch(err => {
+      if (job !== recJob) return;
+      recJob = null;
+      setFinalMode('ready');
+      finalNote(readyNote());
+      if (err.code === 'hidden') toast('הסרטון נעצר כי יצאת מהאפליקציה או שהמסך נכבה. נסי שוב, והשאירי את המסך פתוח.');
+      else if (err.code !== 'cancelled') toast('משהו השתבש ביצירת הסרטון. נסי שוב.');
+      startFinalLoop();
+    });
+  };
+  $('#finalCancel').onclick = () => { if (recJob) recJob.cancel(); };
+
+  // save / share
   $('#finalSave').onclick = async () => {
     const f = finalOut; if (!f) return;
     try {
       if (navigator.canShare && navigator.canShare({ files: [f.file] })) {
         await navigator.share({ files: [f.file], title: 'KOY COSMETICS' });
-        closeFinal(); toast('מוכן! עכשיו אפשר להעלות לאינסטגרם ✨');
+        closeFinal(); toast(f.video ? 'מוכן! עכשיו אפשר להעלות לסטורי או לריל ✨' : 'מוכן! עכשיו אפשר להעלות לאינסטגרם ✨');
         return;
       }
     } catch (err) { if (err && err.name === 'AbortError') return; }
     const a = document.createElement('a'); a.href = f.url; a.download = f.name;
     document.body.appendChild(a); a.click(); a.remove();
-    closeFinal(); toast('נשמר בטלפון ✨ עכשיו אפשר להעלות לאינסטגרם');
+    closeFinal(); toast(f.video ? 'הסרטון נשמר בטלפון ✨ עכשיו אפשר להעלות לסטורי או לריל' : 'נשמר בטלפון ✨ עכשיו אפשר להעלות לאינסטגרם');
   };
 
   // =====================================================================

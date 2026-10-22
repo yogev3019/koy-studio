@@ -1,12 +1,13 @@
 /* KOY Studio — brand renderer.
-   Draws Instagram stories (1080x1920) and posts (1080x1350) in the approved KOY COSMETICS look:
-   Golden Hour colors, Assistant (Hebrew) + Josefin Sans, the full KOY COSMETICS logo (D-026).
+   Draws Instagram stories (1080x1920), posts (1080x1350) and video frames (1080x1920) in the approved
+   KOY COSMETICS look: Golden Hour colors, Assistant (Hebrew) + Josefin Sans, the full KOY COSMETICS logo (D-026).
    Color themes come only from the approved palette (D-013); dark themes use the light-text logo.
-   Story text stays inside the safe area (250px from the top, 340px from the bottom). */
+   Each design is drawn in layers: background (under) → the photo or video frame → logo, text and fades (over).
+   For video the two fixed layers are drawn once and reused on every frame. */
 (function () {
   'use strict';
   const COL = { bg: '#FFF8F1', surface: '#F5DCCB', accent: '#D9A066', primary: '#9A5A33', text: '#3A2219' };
-  const SIZES = { story: { w: 1080, h: 1920 }, post: { w: 1080, h: 1350 }, slots: { w: 1080, h: 1920 } };
+  const SIZES = { story: { w: 1080, h: 1920 }, post: { w: 1080, h: 1350 }, slots: { w: 1080, h: 1920 }, video: { w: 1080, h: 1920 } };
 
   // Color themes (all from the Golden Hour palette). rgb = background as "r,g,b" for soft fades.
   const THEMES = {
@@ -16,7 +17,17 @@
     cocoa: { name: 'כהה', bg: '#3A2219', text: '#FFF8F1', accent: '#D9A066', logo: 'dark', row: 'rgba(255,248,241,.12)', rgb: '58,34,25' },
   };
   // The original look of each design stays the default
-  const DEFAULT_THEME = { 'story:window': 'peach', 'story:full': 'peach', 'post:band': 'ivory', 'post:window': 'peach', 'slots:main': 'peach' };
+  const DEFAULT_THEME = {
+    'story:window': 'peach', 'story:full': 'peach', 'post:band': 'ivory', 'post:window': 'peach', 'slots:main': 'peach',
+    'video:full': 'peach', 'video:window': 'peach', 'video:clean': 'peach',
+  };
+  // Designs that offer a logo position switch, and where the logo starts
+  const DEFAULT_LOGO_POS = { 'story:full': 'bottom', 'video:full': 'bottom', 'video:clean': 'top' };
+  // Instagram covers the top and bottom of the screen with its own buttons: more at the bottom of a reel
+  // (caption, username, music) than of a story (reply bar). Logo and text stay between SAFE.top and the bottom line.
+  const SAFE = { top: 250, story: 1664, reel: 1440 };
+  const LOGO_H = 791 / 1252; // logo height / width (both logo files share one viewBox)
+  const END_CTA = 'לקביעת תור בהודעה';
 
   function loadImg(src) {
     const img = new Image();
@@ -54,7 +65,7 @@
     return h;
   }
 
-  function placeholder(ctx, r) {
+  function placeholder(ctx, r, label) {
     const g = ctx.createLinearGradient(0, r.y, 0, r.y + r.h);
     g.addColorStop(0, '#F8DFC8'); g.addColorStop(0.5, '#EFC096'); g.addColorStop(1, '#D08A58');
     ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
@@ -65,16 +76,16 @@
     ctx.fillStyle = 'rgba(255,248,241,.95)';
     ctx.font = '600 44px "Assistant"';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('התמונה שלך כאן', cx, r.y + r.h * 0.62);
+    ctx.fillText(label, cx, r.y + r.h * 0.62);
     ctx.textBaseline = 'alphabetic';
   }
 
-  /* Draws the photo in rect. zoom 1 = fills the frame (cover); below 1 the whole photo can fit,
-     with a soft, faded copy of the photo behind it so there are no empty gaps.
-     Returns the clamped offset and how far the photo can move (mx, my). */
+  /* Draws the photo (or the current video frame) in rect. zoom 1 = fills the frame (cover); below 1 the
+     whole picture can fit, with a soft, faded copy behind it so there are no empty gaps.
+     Returns the clamped offset and how far the picture can move (mx, my). */
   function drawPhoto(ctx, img, r, st, T) {
-    if (!img) { placeholder(ctx, r); return { x: 0, y: 0, mx: 0, my: 0 }; }
-    const iw = img.width, ih = img.height;
+    const iw = img ? (img.videoWidth || img.width) : 0, ih = img ? (img.videoHeight || img.height) : 0;
+    if (!iw || !ih) { placeholder(ctx, r, st.kind === 'video' ? 'הסרטון שלך כאן' : 'התמונה שלך כאן'); return { x: 0, y: 0, mx: 0, my: 0 }; }
     const cover = Math.max(r.w / iw, r.h / ih);
     const s = cover * (st.zoom || 1);
     const dw = iw * s, dh = ih * s;
@@ -88,6 +99,14 @@
     }
     ctx.drawImage(img, r.x + r.w / 2 - dw / 2 + ox, r.y + r.h / 2 - dh / 2 + oy, dw, dh);
     return { x: ox, y: oy, mx, my };
+  }
+  function photoIn(ctx, st, f, T) {
+    ctx.save();
+    if (f.r) rr(ctx, f.x, f.y, f.w, f.h, f.r); else { ctx.beginPath(); ctx.rect(f.x, f.y, f.w, f.h); }
+    ctx.clip();
+    const off = drawPhoto(ctx, st.photo, f, st, T);
+    ctx.restore();
+    return off;
   }
 
   /* Wraps Hebrew text into at most `maxLines` lines, shrinking the font if needed. */
@@ -114,106 +133,166 @@
     return f.lines.length * f.size * o.lh;
   }
   const fade = (T, a) => `rgba(${T.rgb},${a})`;
+  const bgFill = (ctx, st, T) => { const s = SIZES[st.kind]; ctx.fillStyle = T.bg; ctx.fillRect(0, 0, s.w, s.h); };
+  const bottomLine = st => (st.kind === 'video' && st.dest === 'reel' ? SAFE.reel : SAFE.story);
 
+  /* Full-screen look (photo story and video): fades in the chosen color.
+     Logo at the bottom: the fade turns fully solid before the logo, text sits above it (D-033).
+     Logo at the top: logo in a soft badge, text on a fade at the bottom. */
+  function fullOver(ctx, st, T) {
+    const W = 1080, H = 1920, sb = bottomLine(st);
+    if (st.logoPos === 'top') {
+      const fadeTop = sb - 384;
+      const g = ctx.createLinearGradient(0, fadeTop, 0, fadeTop + 640);
+      g.addColorStop(0, fade(T, 0)); g.addColorStop(0.55, fade(T, 0.86)); g.addColorStop(1, fade(T, 0.97));
+      ctx.fillStyle = g; ctx.fillRect(0, fadeTop, W, 640);
+      if (fadeTop + 640 < H) { ctx.fillStyle = fade(T, 0.97); ctx.fillRect(0, fadeTop + 640, W, H - fadeTop - 640); }
+      const bw = 380, bh = 250, bx = W / 2 - bw / 2, by = 240;
+      ctx.fillStyle = fade(T, 0.93); rr(ctx, bx, by, bw, bh, 125); ctx.fill();
+      drawLogo(ctx, W / 2, by + 40, 250, T.logo);
+      if (st.caption) drawText(ctx, st.caption, W / 2, sb - 174, { size: 72, color: T.text });
+    } else {
+      const logoTop = sb - 164, solidTop = logoTop - 70;
+      const fadeH = st.caption ? 520 : 380;
+      const g = ctx.createLinearGradient(0, solidTop - fadeH, 0, solidTop);
+      g.addColorStop(0, fade(T, 0)); g.addColorStop(0.35, fade(T, 0.35)); g.addColorStop(0.7, fade(T, 0.82)); g.addColorStop(1, fade(T, 1));
+      ctx.fillStyle = g; ctx.fillRect(0, solidTop - fadeH, W, fadeH);
+      ctx.fillStyle = T.bg; ctx.fillRect(0, solidTop, W, H - solidTop);
+      drawLogo(ctx, W / 2, logoTop, 260, T.logo);
+      if (st.caption) {
+        const f = fitText(ctx, st.caption, 900, 70, 600, 2), lineH = f.size * 1.15;
+        const lastBase = logoTop - 40;
+        ctx.fillStyle = T.text; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+        f.lines.forEach((l, i) => ctx.fillText(l, W / 2, lastBase - (f.lines.length - 1 - i) * lineH));
+      }
+    }
+  }
+
+  /* Templates: frame = where the photo/video goes (null = no photo), under = behind it, over = on top of it. */
   const TEMPLATES = {
-    'story:window'(ctx, st, T) {
-      const W = 1080, H = 1920, hasText = !!st.caption;
-      ctx.fillStyle = T.bg; ctx.fillRect(0, 0, W, H);
-      const win = { x: 90, y: 250, w: 900, h: hasText ? 980 : 1060 };
-      ctx.save(); rr(ctx, win.x, win.y, win.w, win.h, 40); ctx.clip();
-      const off = drawPhoto(ctx, st.photo, win, st, T); ctx.restore();
-      const lw = hasText ? 260 : 300;
-      const lh = drawLogo(ctx, W / 2, win.y + win.h + (hasText ? 40 : 60), lw, T.logo);
-      if (hasText) drawText(ctx, st.caption, W / 2, win.y + win.h + 40 + lh + 92, { size: 66, maxLines: 1, color: T.text });
-      return { photoRect: win, offset: off };
+    'story:window': {
+      frame: st => ({ x: 90, y: 250, w: 900, h: st.caption ? 980 : 1060, r: 40 }),
+      under: bgFill,
+      over(ctx, st, T, f) {
+        const lw = st.caption ? 260 : 300;
+        const lh = drawLogo(ctx, 540, f.y + f.h + (st.caption ? 40 : 60), lw, T.logo);
+        if (st.caption) drawText(ctx, st.caption, 540, f.y + f.h + 40 + lh + 92, { size: 66, maxLines: 1, color: T.text });
+      },
     },
-    'story:full'(ctx, st, T) {
-      const W = 1080, H = 1920;
-      ctx.fillStyle = T.bg; ctx.fillRect(0, 0, W, H);
-      const full = { x: 0, y: 0, w: W, h: H };
-      const off = drawPhoto(ctx, st.photo, full, st, T);
-      if (st.logoPos === 'top') {
-        // logo badge at the top (inside the safe area), text at the bottom
-        const g = ctx.createLinearGradient(0, H - 640, 0, H);
-        g.addColorStop(0, fade(T, 0)); g.addColorStop(0.55, fade(T, 0.86)); g.addColorStop(1, fade(T, 0.97));
-        ctx.fillStyle = g; ctx.fillRect(0, H - 640, W, 640);
-        const bw = 380, bh = 250, bx = W / 2 - bw / 2, by = 240;
-        ctx.fillStyle = fade(T, 0.93); rr(ctx, bx, by, bw, bh, 125); ctx.fill();
-        drawLogo(ctx, W / 2, by + 40, 250, T.logo);
-        if (st.caption) drawText(ctx, st.caption, W / 2, 1490, { size: 72, color: T.text });
-      } else {
-        // default: face stays clear. The fade (in the chosen color) turns fully solid before the logo,
-        // so the logo stands on one even color; the optional text sits just above it.
-        const logoTop = 1500, solidTop = logoTop - 70;
-        const fadeH = st.caption ? 520 : 380;
-        const g = ctx.createLinearGradient(0, solidTop - fadeH, 0, solidTop);
-        g.addColorStop(0, fade(T, 0)); g.addColorStop(0.35, fade(T, 0.35)); g.addColorStop(0.7, fade(T, 0.82)); g.addColorStop(1, fade(T, 1));
-        ctx.fillStyle = g; ctx.fillRect(0, solidTop - fadeH, W, fadeH);
-        ctx.fillStyle = T.bg; ctx.fillRect(0, solidTop, W, H - solidTop);
-        drawLogo(ctx, W / 2, logoTop, 260, T.logo);
+    'story:full': { frame: () => ({ x: 0, y: 0, w: 1080, h: 1920, r: 0 }), under: bgFill, over: fullOver },
+    'post:band': {
+      frame: () => ({ x: 0, y: 0, w: 1080, h: 1060, r: 0 }),
+      under: bgFill,
+      over(ctx, st, T) {
         if (st.caption) {
-          const f = fitText(ctx, st.caption, 900, 70, 600, 2), lineH = f.size * 1.15;
-          const lastBase = logoTop - 40;
-          ctx.fillStyle = T.text; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-          f.lines.forEach((l, i) => ctx.fillText(l, W / 2, lastBase - (f.lines.length - 1 - i) * lineH));
+          // logo on the left, text on the right (RTL)
+          drawLogo(ctx, 90 + 115, 1060 + 145 - 73, 230, T.logo);
+          const f = fitText(ctx, st.caption, 620, 60, 600, 2), lineH = f.size * 1.15;
+          const y0 = 1060 + 145 - (f.lines.length * lineH) / 2 + f.size * 0.8;
+          ctx.fillStyle = T.text; ctx.textAlign = 'right'; ctx.textBaseline = 'alphabetic';
+          f.lines.forEach((l, i) => ctx.fillText(l, 990, y0 + i * lineH));
+        } else {
+          drawLogo(ctx, 540, 1060 + 145 - 82, 260, T.logo);
         }
-      }
-      return { photoRect: full, offset: off };
+      },
     },
-    'post:band'(ctx, st, T) {
-      const W = 1080, H = 1350, hasText = !!st.caption;
-      ctx.fillStyle = T.bg; ctx.fillRect(0, 0, W, H);
-      const top = { x: 0, y: 0, w: W, h: 1060 };
-      ctx.save(); ctx.beginPath(); ctx.rect(top.x, top.y, top.w, top.h); ctx.clip();
-      const off = drawPhoto(ctx, st.photo, top, st, T); ctx.restore();
-      if (hasText) {
-        // logo on the left, text on the right (RTL)
-        drawLogo(ctx, 90 + 115, 1060 + 145 - 73, 230, T.logo);
-        const f = fitText(ctx, st.caption, 620, 60, 600, 2), lineH = f.size * 1.15;
-        const y0 = 1060 + 145 - (f.lines.length * lineH) / 2 + f.size * 0.8;
-        ctx.fillStyle = T.text; ctx.textAlign = 'right'; ctx.textBaseline = 'alphabetic';
-        f.lines.forEach((l, i) => ctx.fillText(l, 990, y0 + i * lineH));
-      } else {
-        drawLogo(ctx, W / 2, 1060 + 145 - 82, 260, T.logo);
-      }
-      return { photoRect: top, offset: off };
+    'post:window': {
+      frame: () => ({ x: 70, y: 70, w: 940, h: 1010, r: 36 }),
+      under: bgFill,
+      over(ctx, st, T) { drawLogo(ctx, 540, 1130, 240, T.logo); },
     },
-    'post:window'(ctx, st, T) {
-      const W = 1080, H = 1350;
-      ctx.fillStyle = T.bg; ctx.fillRect(0, 0, W, H);
-      const win = { x: 70, y: 70, w: 940, h: 1010 };
-      ctx.save(); rr(ctx, win.x, win.y, win.w, win.h, 36); ctx.clip();
-      const off = drawPhoto(ctx, st.photo, win, st, T); ctx.restore();
-      drawLogo(ctx, W / 2, 1130, 240, T.logo);
-      return { photoRect: win, offset: off };
+    'slots:main': {
+      frame: () => null,
+      under(ctx, st, T) {
+        const W = 1080;
+        bgFill(ctx, st, T);
+        drawLogo(ctx, W / 2, 260, 280, T.logo);
+        drawText(ctx, st.title || 'תורים פנויים השבוע', W / 2, 640, { size: 96, maxW: 860, color: T.text });
+        const rows = (st.slots || []).map(s => s.trim()).filter(Boolean).slice(0, 5);
+        let y = 830;
+        if (!rows.length) {
+          ctx.save(); ctx.globalAlpha = 0.5; ctx.fillStyle = T.text; ctx.font = '400 42px "Assistant"'; ctx.textAlign = 'center';
+          ctx.fillText('כאן יופיעו התורים הפנויים', W / 2, y + 70); ctx.restore();
+          y += 140;
+        }
+        for (const r of rows) {
+          ctx.fillStyle = T.row; rr(ctx, 110, y, 860, 108, 26); ctx.fill();
+          ctx.fillStyle = T.text; ctx.font = '600 48px "Assistant"'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.fillText(r, W / 2, y + 56);
+          ctx.textBaseline = 'alphabetic';
+          y += 132;
+        }
+        drawText(ctx, END_CTA, W / 2, Math.min(y + 70, 1560), { size: 46, color: T.accent });
+      },
     },
-    'slots:main'(ctx, st, T) {
-      const W = 1080, H = 1920;
-      ctx.fillStyle = T.bg; ctx.fillRect(0, 0, W, H);
-      drawLogo(ctx, W / 2, 260, 280, T.logo);
-      drawText(ctx, st.title || 'תורים פנויים השבוע', W / 2, 640, { size: 96, maxW: 860, color: T.text });
-      const rows = (st.slots || []).map(s => s.trim()).filter(Boolean).slice(0, 5);
-      let y = 830;
-      if (!rows.length) {
-        ctx.save(); ctx.globalAlpha = 0.5; ctx.fillStyle = T.text; ctx.font = '400 42px "Assistant"'; ctx.textAlign = 'center';
-        ctx.fillText('כאן יופיעו התורים הפנויים', W / 2, y + 70); ctx.restore();
-        y += 140;
-      }
-      for (const r of rows) {
-        ctx.fillStyle = T.row; rr(ctx, 110, y, 860, 108, 26); ctx.fill();
-        ctx.fillStyle = T.text; ctx.font = '600 48px "Assistant"'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(r, W / 2, y + 56);
-        ctx.textBaseline = 'alphabetic';
-        y += 132;
-      }
-      drawText(ctx, 'לקביעת תור בהודעה', W / 2, Math.min(y + 70, 1560), { size: 46, color: T.accent });
-      return { photoRect: null, offset: { x: 0, y: 0 } };
+
+    // ---- video designs (story and reel, 1080x1920) ----
+    'video:full': { frame: () => ({ x: 0, y: 0, w: 1080, h: 1920, r: 0 }), under: bgFill, over: fullOver },
+    'video:window': {
+      // the window grows or shrinks so logo and text always end at the safe bottom line
+      frame(st) {
+        const logoTop = bottomLine(st) - (st.caption ? 84 : 0) - 164;
+        return { x: 90, y: SAFE.top, w: 900, h: logoTop - 40 - SAFE.top, r: 40 };
+      },
+      under: bgFill,
+      over(ctx, st, T, f) {
+        const logoTop = f.y + f.h + 40;
+        drawLogo(ctx, 540, logoTop, 260, T.logo);
+        if (st.caption) drawText(ctx, st.caption, 540, logoTop + 164 + 70, { size: 62, maxLines: 1, color: T.text });
+      },
+    },
+    'video:clean': {
+      // the video stays uncovered: a small logo badge, and the text (if any) in a soft pill
+      frame: () => ({ x: 0, y: 0, w: 1080, h: 1920, r: 0 }),
+      under: bgFill,
+      over(ctx, st, T) {
+        const sb = bottomLine(st), top = st.logoPos !== 'bottom';
+        const bw = 300, bh = 196, lw = 220, lh = lw * LOGO_H;
+        const by = top ? SAFE.top : sb - bh;
+        ctx.fillStyle = fade(T, 0.94); rr(ctx, 540 - bw / 2, by, bw, bh, 48); ctx.fill();
+        drawLogo(ctx, 540, by + (bh - lh) / 2 + 4, lw, T.logo);
+        if (st.caption) {
+          const f = fitText(ctx, st.caption, 840, 56, 600, 1);
+          const tw = ctx.measureText(f.lines[0]).width;
+          const ph = Math.round(f.size + 46), pw = Math.min(1000, tw + 96);
+          const py = top ? sb - ph : by - 28 - ph;
+          ctx.fillStyle = fade(T, 0.94); rr(ctx, 540 - pw / 2, py, pw, ph, ph / 2); ctx.fill();
+          ctx.fillStyle = T.text; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.fillText(f.lines[0], 540, py + ph / 2 + 2);
+          ctx.textBaseline = 'alphabetic';
+        }
+      },
     },
   };
 
-  function themeFor(st) {
-    const key = st.kind === 'slots' ? 'slots:main' : `${st.kind}:${st.design}`;
-    return { key, T: THEMES[st.theme] || THEMES[DEFAULT_THEME[key]] };
+  /* End card for videos: the last 2 seconds, solid color with the logo and a call to action. */
+  function endCard(ctx, st, T, a) {
+    ctx.save(); ctx.globalAlpha = a;
+    ctx.fillStyle = T.bg; ctx.fillRect(0, 0, 1080, 1920);
+    drawLogo(ctx, 540, 620, 560, T.logo);
+    let y = 1150;
+    if (st.caption) y += drawText(ctx, st.caption, 540, y, { size: 68, maxW: 900, color: T.text }) + 20;
+    drawText(ctx, END_CTA, 540, y, { size: 50, color: T.accent, weight: 600 });
+    ctx.restore();
+  }
+
+  function keyFor(st) { return st.kind === 'slots' ? 'slots:main' : `${st.kind}:${st.design}`; }
+  function themeFor(st, key) { return THEMES[st.theme] || THEMES[DEFAULT_THEME[key]]; }
+  const isVideo = m => !!m && typeof m.videoWidth === 'number';
+
+  // video: the fixed layers are cached per canvas and rebuilt only when the design changes
+  const layerCache = new WeakMap();
+  function layers(canvas, st, key, T, tpl, f, size) {
+    const sig = JSON.stringify([key, st.caption, T.bg, st.logoPos, st.dest, f]);
+    let L = layerCache.get(canvas);
+    if (L && L.sig === sig) return L;
+    const mk = () => { const c = document.createElement('canvas'); c.width = size.w; c.height = size.h; c.setAttribute('dir', 'rtl'); const x = c.getContext('2d'); try { x.direction = 'rtl'; } catch (e) { /* ok */ } return [c, x]; };
+    const [under, uctx] = mk(), [over, octx] = mk();
+    tpl.under(uctx, st, T, f);
+    if (tpl.over) tpl.over(octx, st, T, f);
+    L = { sig, under, over };
+    layerCache.set(canvas, L);
+    return L;
   }
 
   function render(canvas, st) {
@@ -223,9 +302,23 @@
     canvas.setAttribute('dir', 'rtl');
     const ctx = canvas.getContext('2d');
     try { ctx.direction = 'rtl'; } catch (e) { /* older browsers: canvas dir attribute is enough */ }
-    ctx.clearRect(0, 0, size.w, size.h);
-    const { key, T } = themeFor(st);
-    return TEMPLATES[key](ctx, st, T);
+    const key = keyFor(st), T = themeFor(st, key), tpl = TEMPLATES[key];
+    st = Object.assign({}, st, { logoPos: st.logoPos || DEFAULT_LOGO_POS[key] || 'bottom' });
+    const f = tpl.frame(st);
+    let off = { x: 0, y: 0, mx: 0, my: 0 };
+    if (isVideo(st.photo)) {
+      const L = layers(canvas, st, key, T, tpl, f, size);
+      ctx.drawImage(L.under, 0, 0);
+      if (f) off = photoIn(ctx, st, f, T);
+      ctx.drawImage(L.over, 0, 0);
+    } else {
+      ctx.clearRect(0, 0, size.w, size.h);
+      tpl.under(ctx, st, T, f);
+      if (f) off = photoIn(ctx, st, f, T);
+      if (tpl.over) tpl.over(ctx, st, T, f);
+    }
+    if (st.kind === 'video' && st.endAlpha > 0) endCard(ctx, st, T, st.endAlpha);
+    return { photoRect: f, offset: off };
   }
 
   /* Downscale very large photos so phones stay fast; keeps EXIF orientation (applied by the browser). */
@@ -246,5 +339,5 @@
     });
   }
 
-  window.KOY = { COL, SIZES, THEMES, DEFAULT_THEME, ready, render, loadPhoto };
+  window.KOY = { COL, SIZES, THEMES, DEFAULT_THEME, DEFAULT_LOGO_POS, SAFE, ready, render, loadPhoto };
 })();
