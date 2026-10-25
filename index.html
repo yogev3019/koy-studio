@@ -59,14 +59,15 @@
         <canvas id="preview" width="1080" height="1920" dir="rtl" aria-label="תצוגה מקדימה"></canvas>
         <div id="dragOverlay" class="dragOverlay hidden">
           <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg>
-          <span>גררי את התמונה כדי למקם אותה</span>
+          <span>גררי את התמונה, הלוגו או הטקסט כדי למקם אותם</span>
         </div>
       </div>
       <p id="dragHint" class="hint hidden">אפשר לגרור את התמונה עם האצבע, או להשתמש בחצים למטה</p>
     </div>
 
     <div class="card" id="photoCard" hidden>
-      <h3 id="posTitle">מיקום התמונה</h3>
+      <h3 id="posTitle">מיקום וגודל</h3>
+      <div class="seg small moveSeg" id="moveSeg" role="group" aria-label="מה להזיז"></div>
       <div class="posRow">
         <div class="pad" aria-label="הזזת התמונה">
           <button class="padBtn up" data-move="up" aria-label="להזיז למעלה">▲</button>
@@ -75,7 +76,7 @@
           <button class="padBtn right" data-move="right" aria-label="להזיז ימינה">▶</button>
           <button class="padBtn down" data-move="down" aria-label="להזיז למטה">▼</button>
         </div>
-        <p class="fine padHelp">החצים מזיזים את התמונה בתוך המסגרת.<br>למשל: אם המצח נחתך, לחצי ▼ כדי להוריד את התמונה.</p>
+        <p class="fine padHelp" id="padHelp">החצים מזיזים את התמונה בתוך המסגרת.<br>למשל: אם המצח נחתך, לחצי ▼ כדי להוריד את התמונה.</p>
       </div>
       <div class="rowline">
         <label for="zoom" class="lbl">גודל</label>
@@ -83,8 +84,11 @@
         <input type="range" id="zoom" min="0.6" max="3" step="0.01" value="1" dir="ltr">
         <span class="zl">גדול</span>
       </div>
-      <p class="fine">מתחת לאמצע: כל התמונה נכנסת בלי חיתוך.</p>
-      <button id="changePhoto" class="btn ghost small">החלפת תמונה</button>
+      <p class="fine" id="zoomNote">מתחת לאמצע: כל התמונה נכנסת בלי חיתוך.</p>
+      <div class="btnRow">
+        <button id="changePhoto" class="btn ghost small">החלפת תמונה</button>
+        <button id="resetLayout" class="btn ghost small">החזרת המיקומים</button>
+      </div>
     </div>
 
     <div class="card" id="designCard">

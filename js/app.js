@@ -239,6 +239,7 @@
     photo: null, video: null, x: 0, y: 0, zoom: 1, mx: 0, my: 0, pendingBias: false,
     logoPos: typeof S.prefs.logoPos === 'string' ? { 'story:full': S.prefs.logoPos } : Object.assign({}, S.prefs.logoPos),
     theme: Object.assign({}, S.prefs.theme),
+    layout: JSON.parse(JSON.stringify(S.prefs.layout || {})), sel: 'photo', // her own positions per design; what she is moving
     dest: S.prefs.dest || 'story', endCard: S.prefs.endCard !== false, keepSound: S.prefs.keepSound !== false,
     chip: '', custom: '',
     slots: ['', '', '', '', '', ''],
@@ -276,12 +277,16 @@
   const curKey = () => designKey(kind(), C.design[kind()]);
   const themeOf = key => C.theme[key] || STUDIO.DEFAULT_THEME[key];
   const logoPosOf = key => C.logoPos[key] || STUDIO.DEFAULT_LOGO_POS[key] || 'bottom';
+  // positions are kept per design, and per size for the data designs
+  const layoutKey = (k, design) => (TEXT.includes(k) ? `${k}:main:${C.format}` : designKey(k, design));
+  const curLayoutKey = () => layoutKey(kind(), C.design[kind()]);
+  const layoutOf = key => C.layout[key] || {};
   const priceItems = () => S.biz.services.filter(s => !C.pr.off[s.id] && s.name.trim()).map(s => ({ name: s.name, price: s.price }));
   function state() {
     const k = kind(), key = curKey();
     const st = {
       kind: k, format: C.format, design: C.design[k], photo: media(), x: C.x, y: C.y, zoom: C.zoom, caption: caption(), slots: C.slots,
-      logoPos: logoPosOf(key), theme: themeOf(key), dest: C.dest, cta: cta(), handle: S.biz.handle,
+      logoPos: logoPosOf(key), theme: themeOf(key), dest: C.dest, cta: cta(), handle: S.biz.handle, layout: layoutOf(curLayoutKey()),
     };
     if (k === 'prices') Object.assign(st, { title: C.pr.title.trim(), note: C.pr.note.trim(), items: priceItems() });
     if (k === 'promo') {
@@ -299,8 +304,10 @@
       const o = lastLayout.offset;
       C.x = o.x; C.y = o.y; C.mx = o.mx || 0; C.my = o.my || 0;
       // new portrait photo or video: start a little higher (faces and hands usually sit above the middle)
-      if (C.pendingBias && media()) { C.pendingBias = false; if (C.my > 0) { C.y = C.my * B.PHOTO_BIAS; renderNow(); } }
+      if (C.pendingBias && media()) { C.pendingBias = false; if (C.my > 0) { C.y = C.my * B.PHOTO_BIAS; renderNow(); return; } }
     }
+    syncBlocks();
+    outline();
   }
   let raf = 0;
   function draw() {
@@ -332,7 +339,7 @@
       b.className = 'design' + (C.design[k] === id ? ' on' : '');
       b.dataset.design = id;
       const full = document.createElement('canvas');
-      STUDIO.render(full, { kind: k, design: id, photo: media(), x: C.x, y: C.y, zoom: C.zoom, caption: '', logoPos: logoPosOf(designKey(k, id)), theme: themeOf(designKey(k, id)), dest: C.dest });
+      STUDIO.render(full, { kind: k, design: id, photo: media(), x: C.x, y: C.y, zoom: C.zoom, caption: '', logoPos: logoPosOf(designKey(k, id)), theme: themeOf(designKey(k, id)), dest: C.dest, layout: layoutOf(layoutKey(k, id)) });
       const mini = document.createElement('canvas');
       mini.width = 216; mini.height = Math.round(216 * full.height / full.width);
       mini.getContext('2d').drawImage(full, 0, 0, mini.width, mini.height);
@@ -345,6 +352,7 @@
   // Color choice from the approved palette; remembered separately for each design
   function renderSwatches() {
     const box = $('#swatches'); box.innerHTML = '';
+    box.classList.toggle('many', Object.keys(STUDIO.THEMES).length > 4); // more than 4 colors: two rows
     const key = curKey(), cur = themeOf(key), k = kind();
     const light = k === 'video' ? 'סרטון בהיר' : 'תמונה בהירה';
     $('#colorHint').textContent = key === 'story:full' || key === 'video:full'
@@ -489,8 +497,9 @@
     $$('#formatSeg button').forEach(b => b.classList.toggle('on', b.dataset.format === C.format));
     if (!hasMedia) { clearTimeout(overlayT); $('#dragOverlay').classList.add('hidden'); } // the drag hint belongs to photos only
     $('#uploadBox').hidden = !hasMedia || !!m;
-    $('#photoCard').hidden = !hasMedia || !m;
-    $('#dragHint').classList.toggle('hidden', !hasMedia || !m);
+    $('#photoCard').hidden = hasMedia && !m; // photo designs: after a photo is added; data designs: always (logo and text)
+    $('#changePhoto').hidden = !hasMedia || !m;
+    $('#dragHint').classList.toggle('hidden', hasMedia && !m);
     $('#designCard').hidden = !hasMedia;
     $('#videoCard').hidden = !isVid;
     $('#slotsCard').hidden = !isSlots;
@@ -501,9 +510,9 @@
     $('#fileInput').accept = isVid ? 'video/*' : 'image/*';
     $('#upTitle').textContent = isVid ? 'בחירת סרטון' : 'צילום או בחירת תמונה';
     $('#upSub').textContent = isVid ? 'מהגלריה או מהמצלמה, עד 90 שניות' : 'מהמצלמה או מהגלריה';
-    $('#posTitle').textContent = isVid ? 'מיקום הסרטון' : 'מיקום התמונה';
+    $('#posTitle').textContent = 'מיקום וגודל';
     $('#changePhoto').textContent = isVid ? 'החלפת סרטון' : 'החלפת תמונה';
-    $('#dragHint').textContent = `אפשר לגרור את ${isVid ? 'הסרטון' : 'התמונה'} עם האצבע, או להשתמש בחצים למטה`;
+    $('#dragHint').textContent = hasMedia ? `גררי את ${isVid ? 'הסרטון' : 'התמונה'}, הלוגו או הטקסט עם האצבע. בשתי אצבעות: הגדלה והקטנה.` : 'גררי את הלוגו או הטקסט עם האצבע. בשתי אצבעות: הגדלה והקטנה.';
     if (k === 'prices') renderPricesForm();
     renderDesigns(); renderTextCard(); updateLogoRow(); renderSwatches(); renderVideoCard(); draw(); ensureLoop();
   }
@@ -532,7 +541,7 @@
       const t = isVid ? 'video' : 'photo';
       C.type = t; S.prefs.type = t; save();
       switchPosGroup(kind());
-      C.x = 0; C.y = 0; C.zoom = 1; $('#zoom').value = 1; C.pendingBias = true;
+      C.x = 0; C.y = 0; C.zoom = 1; C.sel = 'photo'; syncZoomSlider(); C.pendingBias = true;
       $('#consent').checked = false; $('#clientSel').value = '';
       refreshUI();
       showDragOverlay();
@@ -541,7 +550,7 @@
     e.target.value = '';
   });
   $('#changePhoto').onclick = () => $('#fileInput').click();
-  $('#zoom').oninput = e => { C.zoom = +e.target.value; draw(); };
+  $('#zoom').oninput = e => scaleSel(C.sel, +e.target.value);
 
   // overlay hint: shown when a photo or video is added, hidden on first touch
   let overlayT;
@@ -554,6 +563,10 @@
   // arrow pad: tap = small step, hold = keeps moving
   const STEP = 24; let edgeToastAt = 0, holdT = null;
   function nudge(dir) {
+    if (C.sel !== 'photo') {
+      const dx = dir === 'left' ? -STEP : dir === 'right' ? STEP : 0, dy = dir === 'up' ? -STEP : dir === 'down' ? STEP : 0;
+      moveSel(C.sel, dx, dy); saveLayout(); return;
+    }
     if (!media()) return;
     const bx = C.x, by = C.y;
     if (dir === 'up') C.y -= STEP; if (dir === 'down') C.y += STEP;
@@ -570,20 +583,116 @@
     b.addEventListener('pointerdown', e => { e.preventDefault(); nudge(b.dataset.move); stop(); holdT = setInterval(() => nudge(b.dataset.move), 90); });
     ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => b.addEventListener(ev, stop));
   });
-  $('#centerBtn').onclick = () => { C.x = 0; C.y = 0; draw(); };
+  $('#centerBtn').onclick = () => {
+    if (C.sel === 'photo') { C.x = 0; C.y = 0; } else { const b = blockOf(C.sel); b.x = 0; b.y = 0; saveLayout(); flashOutline(); } // a block goes back to its place
+    draw();
+  };
+  $('#resetLayout').onclick = () => {
+    delete C.layout[curLayoutKey()]; saveLayout(); syncZoomSlider(); draw();
+    toast('הלוגו והטקסט חזרו למקום המקורי של העיצוב');
+  };
   $('#customText').oninput = e => { C.custom = e.target.value; renderChips(); renderVideoCard(); draw(); };
 
-  // drag + pinch on the preview
-  const ptrs = new Map(); let pinch0 = null;
-  preview.addEventListener('pointerdown', e => { if (!media()) return; hideDragOverlay(); preview.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch0 = { d: Math.hypot(a.x - b.x, a.y - b.y), z: C.zoom }; } });
+  // ---------- moving and resizing: the photo, or a block of the design (logo, text, booking line) ----------
+  const BLOCK_NAMES = { logo: 'הלוגו', text: 'הטקסט', cta: 'קביעת תור' };
+  function blockOf(n) { const k = curLayoutKey(), L = C.layout[k] || (C.layout[k] = {}); return L[n] || (L[n] = { x: 0, y: 0, s: 1 }); }
+  let layoutT;
+  const saveLayout = () => { clearTimeout(layoutT); layoutT = setTimeout(() => { S.prefs.layout = C.layout; save(); renderDesigns(); }, 400); };
+  // after each render: keep stored offsets inside the canvas, and list what can be moved
+  let blockSig = '';
+  function syncBlocks() {
+    const boxes = (lastLayout && lastLayout.boxes) || {}, L = C.layout[curLayoutKey()];
+    if (L) for (const [n, bx] of Object.entries(boxes)) if (L[n]) { L[n].x = bx.off.x; L[n].y = bx.off.y; }
+    const names = [...(media() ? ['photo'] : []), ...Object.keys(BLOCK_NAMES).filter(n => boxes[n])];
+    if (!names.includes(C.sel)) C.sel = names[0] || 'photo';
+    const sig = names.join(',') + '|' + curLayoutKey();
+    if (sig === blockSig) return;
+    blockSig = sig;
+    const box = $('#moveSeg'); box.innerHTML = '';
+    for (const n of names) {
+      const b = document.createElement('button');
+      b.dataset.block = n; b.classList.toggle('on', n === C.sel);
+      b.textContent = n === 'photo' ? (kind() === 'video' ? 'הסרטון' : 'התמונה') : BLOCK_NAMES[n];
+      b.onclick = () => { selectBlock(n); if (n !== 'photo') { flashOutline(); draw(); } };
+      box.appendChild(b);
+    }
+    box.classList.toggle('hidden', names.length < 2);
+    syncZoomSlider();
+  }
+  function selectBlock(n) {
+    C.sel = n;
+    $$('#moveSeg button').forEach(b => b.classList.toggle('on', b.dataset.block === n));
+    syncZoomSlider();
+  }
+  // a block can grow up to the width of the design
+  function maxScale(n) {
+    const bx = lastLayout && lastLayout.boxes && lastLayout.boxes[n];
+    return bx ? Math.max(1, Math.min(2, (preview.width - 40) / (bx.w / bx.off.s))) : 2;
+  }
+  function syncZoomSlider() {
+    const z = $('#zoom'), photo = C.sel === 'photo';
+    z.min = photo ? 0.6 : 0.5; z.max = photo ? 3 : maxScale(C.sel);
+    z.value = photo ? C.zoom : ((layoutOf(curLayoutKey())[C.sel] || {}).s || 1);
+    $('#zoomNote').classList.toggle('hidden', !photo);
+    $('#padHelp').innerHTML = photo
+      ? 'החצים מזיזים את התמונה בתוך המסגרת.<br>למשל: אם משהו נחתך, לחצי על החץ לכיוון שלו.'
+      : `החצים מזיזים את ${BLOCK_NAMES[C.sel]}.<br>"מרכז" מחזיר למקום המקורי.`;
+  }
+  function moveSel(n, dx, dy) {
+    if (n === 'photo') { C.x += dx; C.y += dy; } else { const b = blockOf(n); b.x += dx; b.y += dy; flashOutline(); }
+    draw();
+  }
+  function scaleSel(n, z) {
+    if (n === 'photo') { C.zoom = Math.max(0.6, Math.min(3, z)); $('#zoom').value = C.zoom; }
+    else { const b = blockOf(n); b.s = Math.max(0.5, Math.min(maxScale(n), z)); $('#zoom').value = b.s; flashOutline(); saveLayout(); }
+    draw();
+  }
+  // a dashed frame shows which block is moving (on the screen only, never in the saved file)
+  let outlineUntil = 0, outlineT;
+  function flashOutline() { outlineUntil = Date.now() + 1400; clearTimeout(outlineT); outlineT = setTimeout(draw, 1450); }
+  function outline() {
+    if (C.sel === 'photo' || Date.now() > outlineUntil) return;
+    const b = lastLayout && lastLayout.boxes && lastLayout.boxes[C.sel]; if (!b) return;
+    const ctx = preview.getContext('2d'), k = preview.width / Math.max(1, preview.clientWidth), p = 16;
+    ctx.save(); ctx.setLineDash([7 * k, 5 * k]); ctx.lineWidth = 2 * k;
+    ctx.strokeStyle = 'rgba(255,255,255,.95)'; ctx.shadowColor = 'rgba(0,0,0,.5)'; ctx.shadowBlur = 3 * k;
+    ctx.strokeRect(b.x - p, b.y - p, b.w + 2 * p, b.h + 2 * p);
+    ctx.restore();
+  }
+
+  // drag + pinch on the preview: a touch on the logo or the text moves it; anywhere else moves the photo
+  const ptrs = new Map(); let pinch0 = null, dragSel = null;
+  function hitBlock(e) {
+    const r = preview.getBoundingClientRect(), k = preview.width / r.width, x = (e.clientX - r.left) * k, y = (e.clientY - r.top) * k;
+    const boxes = (lastLayout && lastLayout.boxes) || {}, pad = 36;
+    let best = null;
+    for (const [n, b] of Object.entries(boxes)) {
+      if (x >= b.x - pad && x <= b.x + b.w + pad && y >= b.y - pad && y <= b.y + b.h + pad && (!best || b.w * b.h < best.a)) best = { n, a: b.w * b.h };
+    }
+    return best && best.n;
+  }
+  preview.addEventListener('pointerdown', e => {
+    if (!ptrs.size) {
+      dragSel = hitBlock(e) || (media() ? 'photo' : null);
+      if (!dragSel) return;
+      selectBlock(dragSel);
+      if (dragSel !== 'photo') { flashOutline(); draw(); }
+    }
+    hideDragOverlay(); preview.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch0 = { d: Math.hypot(a.x - b.x, a.y - b.y), z: dragSel === 'photo' ? C.zoom : blockOf(dragSel).s || 1 }; }
+  });
   preview.addEventListener('pointermove', e => {
     if (!ptrs.has(e.pointerId)) return;
     const prev = ptrs.get(e.pointerId); const cur = { x: e.clientX, y: e.clientY }; ptrs.set(e.pointerId, cur);
     const k = preview.width / preview.clientWidth;
-    if (ptrs.size === 1) { C.x += (cur.x - prev.x) * k; C.y += (cur.y - prev.y) * k; draw(); }
-    else if (ptrs.size === 2 && pinch0) { const [a, b] = [...ptrs.values()]; const d = Math.hypot(a.x - b.x, a.y - b.y); C.zoom = Math.max(0.6, Math.min(3, pinch0.z * d / pinch0.d)); $('#zoom').value = C.zoom; draw(); }
+    if (ptrs.size === 1) moveSel(dragSel, (cur.x - prev.x) * k, (cur.y - prev.y) * k);
+    else if (ptrs.size === 2 && pinch0) { const [a, b] = [...ptrs.values()]; scaleSel(dragSel, pinch0.z * Math.hypot(a.x - b.x, a.y - b.y) / pinch0.d); }
   });
-  const endPtr = e => { ptrs.delete(e.pointerId); if (ptrs.size < 2) pinch0 = null; };
+  const endPtr = e => {
+    if (!ptrs.delete(e.pointerId)) return;
+    if (ptrs.size < 2) pinch0 = null;
+    if (!ptrs.size && dragSel && dragSel !== 'photo') saveLayout();
+  };
   preview.addEventListener('pointerup', endPtr); preview.addEventListener('pointercancel', endPtr);
 
   // client + consent
@@ -996,5 +1105,5 @@
     navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !reloaded) { reloaded = true; location.reload(); } });
     window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').then(r => r.update()).catch(() => {}));
   }
-  window.__studio = { S: () => S, C };   // for automated tests only
+  window.__studio = { S: () => S, C, last: () => lastLayout };   // for automated tests only
 })();

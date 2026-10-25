@@ -318,3 +318,10 @@ textarea.field { min-height: 90px; resize: vertical; }
 .sched .from { width: 104px; }
 .sched .dash { opacity: .6; }
 .instList { margin: 8px 0 0; padding-inline-start: 22px; line-height: 1.8; }
+
+/* v1.2 / 2.1 — move and resize the logo and the text */
+.moveSeg { margin-bottom: 12px; }
+.moveSeg button { flex: 1; }
+.btnRow { display: flex; flex-wrap: wrap; gap: 8px; }
+.btnRow .btn[hidden] { display: none; }
+.swatches.many { display: grid; grid-template-columns: repeat(3, 1fr); row-gap: 10px; }

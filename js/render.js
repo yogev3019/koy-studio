@@ -5,6 +5,8 @@
    Designs made from the owner's own data: price list, promotion, shade of the week, review, tip, open slots.
    Logo sizes are given as a nominal width for a logo of height/width 0.325 (AK's signature); any logo is drawn
    at the same height, so wide and tall logos sit equally well in every layout.
+   Layout: every design is made of blocks (logo, text, booking line) that the owner can drag and resize;
+   st.layout = { logo: {x, y, s}, text: {...}, cta: {...} }, and render() reports each block's box back.
    Source of truth: Desktop/STUDIO_CORE/core — copy into each app with STUDIO_CORE/sync.js. */
 (function () {
   'use strict';
@@ -28,10 +30,14 @@
     img.src = src;
     return [img, p];
   }
-  const [logoLight, pL] = loadImg('assets/logo.svg');
-  const [logoDark, pD] = loadImg('assets/logo-dark.svg');
+  // logo versions from the brand (light designs, dark designs, and any extra, e.g. lilac on black)
+  const LOGO = {}, logoWaits = [];
+  for (const [k, src] of Object.entries(B.LOGOS || { light: 'assets/logo.svg', dark: 'assets/logo-dark.svg' })) {
+    const [img, p] = loadImg(src); LOGO[k] = img; logoWaits.push(p);
+  }
+  const logoImg = v => LOGO[v] || LOGO.light;
   const ready = Promise.all([
-    pL, pD,
+    ...logoWaits,
     document.fonts.load(font(40), 'שלום'), document.fonts.load(font(40, BW), 'שלום'),
     document.fonts.load('40px "Josefin Sans"', 'NAILS 18:00'),
   ]).catch(() => {});
@@ -48,10 +54,33 @@
   }
   // nominal width → drawn at height nominal*REF; returns that height
   function drawLogo(ctx, cx, top, nominal, variant) {
-    const img = variant === 'dark' ? logoDark : logoLight, h = nominal * REF;
+    const img = logoImg(variant), h = nominal * REF;
     if (!img.naturalWidth) return h;
     const w = h * img.naturalWidth / img.naturalHeight;
     ctx.drawImage(img, cx - w / 2, top, w, h);
+    return h;
+  }
+  const logoW = (variant, nominal) => { const img = logoImg(variant), h = nominal * REF; return img.naturalWidth ? h * img.naturalWidth / img.naturalHeight : nominal; };
+
+  /* Blocks: drawn around an anchor (scaled there, then moved by the owner's offset). fn draws the block and
+     returns its natural box; the box, moved and scaled, is reported back so the app can pick blocks by touch.
+     The anchor always stays on the canvas, so a block can't be lost off the edge. */
+  let OUT = null, CANVAS = SIZES.story;
+  function grp(ctx, st, name, ax, ay, fn) {
+    const L = (st.layout && st.layout[name]) || {};
+    const s = Math.max(0.4, Math.min(2.5, +L.s || 1));
+    const x = Math.max(-ax, Math.min(CANVAS.w - ax, +L.x || 0)), y = Math.max(-ay, Math.min(CANVAS.h - ay, +L.y || 0));
+    ctx.save();
+    if (x || y || s !== 1) { ctx.translate(ax + x, ay + y); ctx.scale(s, s); ctx.translate(-ax, -ay); }
+    const b = fn();
+    ctx.restore();
+    if (OUT && b) OUT[name] = { x: ax + x + (b.x - ax) * s, y: ay + y + (b.y - ay) * s, w: b.w * s, h: b.h * s, off: { x, y, s } };
+    return b;
+  }
+  // the logo as a block; returns its height
+  function logoBlock(ctx, st, cx, top, nominal, variant) {
+    const h = nominal * REF, w = logoW(variant, nominal);
+    grp(ctx, st, 'logo', cx, top + h / 2, () => { drawLogo(ctx, cx, top, nominal, variant); return { x: cx - w / 2, y: top, w, h }; });
     return h;
   }
 
@@ -149,7 +178,16 @@
     const f = fitText(ctx, str, o.maxW, o.size, o.maxLines, 0.6, o.weight);
     ctx.fillStyle = o.color; ctx.textAlign = o.align; ctx.textBaseline = 'alphabetic';
     f.lines.forEach((l, i) => ctx.fillText(l, x, y + i * f.size * o.lh));
+    lastText = { w: Math.max(0, ...f.lines.map(l => ctx.measureText(l).width)), size: f.size };
     return f.lines.length * f.size * o.lh;
+  }
+  let lastText = { w: 0, size: 0 };
+  // box of the text drawn last (first baseline at y)
+  const tbox = (x, y, h, align) => { const w = lastText.w, z = lastText.size; return { x: align === 'right' ? x - w : align === 'left' ? x : x - w / 2, y: y - z * 0.9, w, h }; };
+  // text as a block; returns its height
+  function textBlock(ctx, st, str, x, y, o, name = 'text') {
+    const b = grp(ctx, st, name, x, y - (o.size || 64) * 0.35, () => { const h = drawText(ctx, str, x, y, o); return Object.assign(tbox(x, y, h, o.align), { th: h }); });
+    return b.th;
   }
   // prices and numbers in Hebrew text: draw left-to-right
   function ltrText(ctx, str, x, y, align) {
@@ -169,12 +207,18 @@
     ctx.fillStyle = filled ? T.btnText : T.accent; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(text, cx, y + h / 2 + size * 0.04);
     ctx.textBaseline = 'alphabetic';
+    lastPillW = w;
     return h;
   }
+  let lastPillW = 0;
   // CTA (+ Instagram handle, if added) at the bottom of data designs
   function footer(ctx, st, T, y) {
-    drawText(ctx, st.cta || CTA, 540, y, { size: 44, color: T.accent, maxLines: 1 });
-    if (st.handle) { ctx.fillStyle = T.text; ctx.globalAlpha = 0.7; ctx.font = '34px "Josefin Sans"'; ltrText(ctx, '@' + st.handle.replace(/^@/, ''), 540, y + 58, 'center'); ctx.globalAlpha = 1; }
+    grp(ctx, st, 'cta', 540, y + (st.handle ? 10 : -15), () => {
+      drawText(ctx, st.cta || CTA, 540, y, { size: 44, color: T.accent, maxLines: 1 });
+      const w = Math.max(lastText.w, 320);
+      if (st.handle) { ctx.fillStyle = T.text; ctx.globalAlpha = 0.7; ctx.font = '34px "Josefin Sans"'; ltrText(ctx, '@' + st.handle.replace(/^@/, ''), 540, y + 58, 'center'); ctx.globalAlpha = 1; }
+      return { x: 540 - w / 2, y: y - 42, w, h: st.handle ? 112 : 56 };
+    });
   }
 
   /* Full-screen look (photo story and video): fades in the chosen color.
@@ -188,13 +232,13 @@
       ctx.fillStyle = g; ctx.fillRect(0, fadeTop, W, 640);
       if (fadeTop + 640 < H) { ctx.fillStyle = fade(T, 0.97); ctx.fillRect(0, fadeTop + 640, W, H - fadeTop - 640); }
       const lw = 440, lh = lw * REF, bh = lh + 90;
-      ctx.font = font(10);
-      const img = T.logo === 'dark' ? logoDark : logoLight;
-      const realW = img.naturalWidth ? lh * img.naturalWidth / img.naturalHeight : lw;
-      const bw = Math.max(380, realW + 120), by = 240;
-      ctx.fillStyle = fade(T, 0.93); rr(ctx, W / 2 - bw / 2, by, bw, bh, bh / 2); ctx.fill();
-      drawLogo(ctx, W / 2, by + (bh - lh) / 2, lw, T.logo);
-      if (st.caption) drawText(ctx, st.caption, W / 2, sb - 174, { size: 72, color: T.text });
+      const bw = Math.max(380, logoW(T.logo, lw) + 120), by = 240;
+      grp(ctx, st, 'logo', W / 2, by + bh / 2, () => {
+        ctx.fillStyle = fade(T, 0.93); rr(ctx, W / 2 - bw / 2, by, bw, bh, bh / 2); ctx.fill();
+        drawLogo(ctx, W / 2, by + (bh - lh) / 2, lw, T.logo);
+        return { x: W / 2 - bw / 2, y: by, w: bw, h: bh };
+      });
+      if (st.caption) textBlock(ctx, st, st.caption, W / 2, sb - 174, { size: 72, color: T.text });
     } else {
       const logoTop = sb - LH, solidTop = logoTop - 70;
       const fadeH = st.caption ? 520 : 380;
@@ -202,17 +246,22 @@
       g.addColorStop(0, fade(T, 0)); g.addColorStop(0.35, fade(T, 0.35)); g.addColorStop(0.7, fade(T, 0.82)); g.addColorStop(1, fade(T, 1));
       ctx.fillStyle = g; ctx.fillRect(0, solidTop - fadeH, W, fadeH);
       ctx.fillStyle = T.bg; ctx.fillRect(0, solidTop, W, H - solidTop);
-      drawLogo(ctx, W / 2, logoTop, LW, T.logo);
+      logoBlock(ctx, st, W / 2, logoTop, LW, T.logo);
       if (st.caption) {
         const f = fitText(ctx, st.caption, 900, 70, 2), lineH = f.size * 1.18;
-        const lastBase = logoTop - 40;
-        ctx.fillStyle = T.text; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-        f.lines.forEach((l, i) => ctx.fillText(l, W / 2, lastBase - (f.lines.length - 1 - i) * lineH));
+        const lastBase = logoTop - 40, firstBase = lastBase - (f.lines.length - 1) * lineH, top = firstBase - f.size * 0.9;
+        grp(ctx, st, 'text', W / 2, (top + lastBase) / 2, () => {
+          ctx.font = font(f.size); ctx.fillStyle = T.text; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+          f.lines.forEach((l, i) => ctx.fillText(l, W / 2, firstBase + i * lineH));
+          const w = Math.max(...f.lines.map(l => ctx.measureText(l).width));
+          return { x: W / 2 - w / 2, y: top, w, h: lastBase - top + f.size * 0.25 };
+        });
       }
     }
   }
 
-  /* Templates: frame = where the photo/video goes (null = no photo), under = behind it, over = on top of it. */
+  /* Templates: frame = where the photo/video goes (null = no photo), under = behind it, over = on top of it.
+     Logo, text and booking line are blocks (see grp), so the owner can move and resize them. */
   const TEMPLATES = {
     // ---- photo ----
     'story:window': {
@@ -220,8 +269,8 @@
       under: bgFill,
       over(ctx, st, T, f) {
         const lw = st.caption ? 470 : 520;
-        const lh = drawLogo(ctx, 540, f.y + f.h + (st.caption ? 44 : 64), lw, T.logo);
-        if (st.caption) drawText(ctx, st.caption, 540, f.y + f.h + 44 + lh + 96, { size: 66, maxLines: 1, color: T.text });
+        const lh = logoBlock(ctx, st, 540, f.y + f.h + (st.caption ? 44 : 64), lw, T.logo);
+        if (st.caption) textBlock(ctx, st, st.caption, 540, f.y + f.h + 44 + lh + 96, { size: 66, maxLines: 1, color: T.text });
       },
     },
     'story:full': { frame: () => ({ x: 0, y: 0, w: 1080, h: 1920, r: 0 }), under: bgFill, over: fullOver },
@@ -231,24 +280,26 @@
       over(ctx, st, T) {
         if (st.caption) {
           // logo on the left, text on the right (RTL)
-          const lw = 360, lh = lw * REF;
-          const img = T.logo === 'dark' ? logoDark : logoLight;
-          const realW = img.naturalWidth ? lh * img.naturalWidth / img.naturalHeight : lw;
-          drawLogo(ctx, 80 + realW / 2, 1060 + 145 - lh / 2, lw, T.logo);
+          const lw = 360, lh = lw * REF, realW = logoW(T.logo, lw);
+          logoBlock(ctx, st, 80 + realW / 2, 1060 + 145 - lh / 2, lw, T.logo);
           const f = fitText(ctx, st.caption, 1000 - 80 - realW - 60, 58, 2), lineH = f.size * 1.18;
           const y0 = 1060 + 145 - (f.lines.length * lineH) / 2 + f.size * 0.8;
-          ctx.fillStyle = T.text; ctx.textAlign = 'right'; ctx.textBaseline = 'alphabetic';
-          f.lines.forEach((l, i) => ctx.fillText(l, 1000, y0 + i * lineH));
+          const w = Math.max(...f.lines.map(l => ctx.measureText(l).width));
+          grp(ctx, st, 'text', 1000 - w / 2, 1205, () => {
+            ctx.font = font(f.size); ctx.fillStyle = T.text; ctx.textAlign = 'right'; ctx.textBaseline = 'alphabetic';
+            f.lines.forEach((l, i) => ctx.fillText(l, 1000, y0 + i * lineH));
+            return { x: 1000 - w, y: y0 - f.size * 0.9, w, h: f.lines.length * lineH };
+          });
         } else {
           const lw = 470, lh = lw * REF;
-          drawLogo(ctx, 540, 1060 + 145 - lh / 2, lw, T.logo);
+          logoBlock(ctx, st, 540, 1060 + 145 - lh / 2, lw, T.logo);
         }
       },
     },
     'post:window': {
       frame: () => ({ x: 70, y: 70, w: 940, h: 1010, r: 36 }),
       under: bgFill,
-      over(ctx, st, T) { const lw = 440, lh = lw * REF; drawLogo(ctx, 540, 1080 + (270 - lh) / 2, lw, T.logo); },
+      over(ctx, st, T) { const lw = 440, lh = lw * REF; logoBlock(ctx, st, 540, 1080 + (270 - lh) / 2, lw, T.logo); },
     },
     // ---- open slots (from the work days) ----
     'slots:main': {
@@ -256,23 +307,26 @@
       under(ctx, st, T) {
         const W = 1080;
         bgFill(ctx, st, T);
-        drawLogo(ctx, W / 2, 250, 480, T.logo);
-        drawText(ctx, st.title || 'תורים פנויים השבוע', W / 2, 620, { size: 96, maxW: 860, color: T.text });
+        logoBlock(ctx, st, W / 2, 250, 480, T.logo);
         const rows = (st.slots || []).map(s => s.trim()).filter(Boolean).slice(0, 6);
-        let y = 760;
-        if (!rows.length) {
-          ctx.save(); ctx.globalAlpha = 0.5; ctx.fillStyle = T.text; ctx.font = font(42, BW); ctx.textAlign = 'center';
-          ctx.fillText('כאן יופיעו התורים הפנויים', W / 2, y + 70); ctx.restore();
-          y += 140;
-        }
-        for (const r of rows) {
-          ctx.fillStyle = T.row; rr(ctx, 110, y, 860, 104, 26); ctx.fill();
-          ctx.fillStyle = T.text; ctx.font = font(46); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-          ctx.fillText(r, W / 2, y + 54);
-          ctx.textBaseline = 'alphabetic';
-          y += 126;
-        }
-        footer(ctx, st, T, Math.min(y + 80, 1560));
+        const end = 760 + (rows.length ? rows.length * 126 : 140), top = 620 - 96 * 0.9;
+        grp(ctx, st, 'text', W / 2, (top + end) / 2, () => {
+          drawText(ctx, st.title || 'תורים פנויים השבוע', W / 2, 620, { size: 96, maxW: 860, color: T.text });
+          let y = 760;
+          if (!rows.length) {
+            ctx.save(); ctx.globalAlpha = 0.5; ctx.fillStyle = T.text; ctx.font = font(42, BW); ctx.textAlign = 'center';
+            ctx.fillText('כאן יופיעו התורים הפנויים', W / 2, y + 70); ctx.restore();
+          }
+          for (const r of rows) {
+            ctx.fillStyle = T.row; rr(ctx, 110, y, 860, 104, 26); ctx.fill();
+            ctx.fillStyle = T.text; ctx.font = font(46); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillText(r, W / 2, y + 54);
+            ctx.textBaseline = 'alphabetic';
+            y += 126;
+          }
+          return { x: 110, y: top, w: 860, h: end - top };
+        });
+        footer(ctx, st, T, Math.min(end + 80, 1560));
       },
     },
     // ---- price list (from the owner's services) ----
@@ -281,35 +335,42 @@
       under(ctx, st, T) {
         const S = sizeOf(st), story = S.h === 1920, W = 1080;
         bgFill(ctx, st, T);
-        const lh = drawLogo(ctx, W / 2, story ? 250 : 70, story ? 440 : 360, T.logo);
-        let y = (story ? 250 : 70) + lh + (story ? 110 : 80);
-        y += drawText(ctx, st.title || 'מחירון', W / 2, y, { size: story ? 104 : 86, color: T.text, maxLines: 1 }) - (story ? 40 : 30);
-        if (st.note) y += drawText(ctx, st.note, W / 2, y + 30, { size: story ? 38 : 34, color: T.accent, maxLines: 2, weight: BW }) + 10;
-        const items = (st.items || []).filter(i => i && String(i.name || '').trim()).slice(0, 10);
-        const bottom = story ? 1470 : 1150, top = y + 20;
-        if (!items.length) {
-          ctx.save(); ctx.globalAlpha = 0.55; drawText(ctx, 'הוסיפי שירותים ומחירים בהגדרות', W / 2, top + 120, { size: 42, color: T.text }); ctx.restore();
-        } else {
-          // few services: bigger rows, and the list sits in the middle of the free space
-          const rowH = Math.max(76, Math.min(story ? 170 : 124, (bottom - top) / items.length));
-          const fs = Math.round(Math.max(34, Math.min(story ? 58 : 52, rowH * 0.4)));
-          const y0 = top + Math.max(0, (bottom - top - rowH * items.length) * 0.4);
-          items.forEach((it, i) => {
-            const yb = y0 + i * rowH + rowH * 0.64;
-            const p = price(it.price);
-            ctx.font = font(fs);
-            const pw = p ? ctx.measureText(p).width : 0;
-            const f = fitText(ctx, it.name, 860 - pw - 40, fs, 1, 0.7);
-            ctx.fillStyle = T.text; ctx.textAlign = 'right'; ctx.font = font(f.size);
-            ctx.fillText(f.lines[0], W - 110, yb);
-            if (p) {
-              ctx.fillStyle = T.accent; ctx.font = font(fs);
-              if (/[֐-׿]/.test(p)) { ctx.textAlign = 'left'; ctx.fillText(p, 110, yb); } // Hebrew text ("החל מ-20") stays right-to-left
-              else ltrText(ctx, p, 110, yb, 'left');
-            }
-            if (i < items.length - 1) { ctx.fillStyle = T.text; ctx.globalAlpha = 0.12; ctx.fillRect(110, y0 + (i + 1) * rowH, 860, 2); ctx.globalAlpha = 1; }
-          });
-        }
+        const lh = logoBlock(ctx, st, W / 2, story ? 250 : 70, story ? 440 : 360, T.logo);
+        const yT = (story ? 250 : 70) + lh + (story ? 110 : 80), top0 = yT - (story ? 104 : 86) * 0.9;
+        const bottom = story ? 1470 : 1150;
+        grp(ctx, st, 'text', W / 2, (top0 + bottom) / 2, () => {
+          let y = yT;
+          y += drawText(ctx, st.title || 'מחירון', W / 2, y, { size: story ? 104 : 86, color: T.text, maxLines: 1 }) - (story ? 40 : 30);
+          if (st.note) y += drawText(ctx, st.note, W / 2, y + 30, { size: story ? 38 : 34, color: T.accent, maxLines: 2, weight: BW }) + 10;
+          const items = (st.items || []).filter(i => i && String(i.name || '').trim()).slice(0, 10);
+          const top = y + 20;
+          let end = top + 160;
+          if (!items.length) {
+            ctx.save(); ctx.globalAlpha = 0.55; drawText(ctx, 'הוסיפי שירותים ומחירים בהגדרות', W / 2, top + 120, { size: 42, color: T.text }); ctx.restore();
+          } else {
+            // few services: bigger rows, and the list sits in the middle of the free space
+            const rowH = Math.max(76, Math.min(story ? 170 : 124, (bottom - top) / items.length));
+            const fs = Math.round(Math.max(34, Math.min(story ? 58 : 52, rowH * 0.4)));
+            const y0 = top + Math.max(0, (bottom - top - rowH * items.length) * 0.4);
+            end = y0 + rowH * items.length;
+            items.forEach((it, i) => {
+              const yb = y0 + i * rowH + rowH * 0.64;
+              const p = price(it.price);
+              ctx.font = font(fs);
+              const pw = p ? ctx.measureText(p).width : 0;
+              const f = fitText(ctx, it.name, 860 - pw - 40, fs, 1, 0.7);
+              ctx.fillStyle = T.text; ctx.textAlign = 'right'; ctx.font = font(f.size);
+              ctx.fillText(f.lines[0], W - 110, yb);
+              if (p) {
+                ctx.fillStyle = T.accent; ctx.font = font(fs);
+                if (/[֐-׿]/.test(p)) { ctx.textAlign = 'left'; ctx.fillText(p, 110, yb); } // Hebrew text ("החל מ-20") stays right-to-left
+                else ltrText(ctx, p, 110, yb, 'left');
+              }
+              if (i < items.length - 1) { ctx.fillStyle = T.text; ctx.globalAlpha = 0.12; ctx.fillRect(110, y0 + (i + 1) * rowH, 860, 2); ctx.globalAlpha = 1; }
+            });
+          }
+          return { x: 110, y: top0, w: 860, h: end - top0 };
+        });
         footer(ctx, st, T, story ? 1560 : 1250);
       },
     },
@@ -319,29 +380,36 @@
       under(ctx, st, T) {
         const S = sizeOf(st), story = S.h === 1920, W = 1080;
         bgFill(ctx, st, T);
-        const lh = drawLogo(ctx, W / 2, story ? 250 : 64, story ? 440 : 340, T.logo);
-        let y = (story ? 250 : 64) + lh + (story ? 120 : 70);
-        y += pill(ctx, st.label || 'מבצע', W / 2, y, story ? 40 : 34, T, false) + (story ? 70 : 50);
-        if (st.title) y += drawText(ctx, st.title, W / 2, y + (story ? 70 : 60), { size: story ? 100 : 84, color: T.text, maxLines: 2 }) + 10;
-        if (st.service && st.service !== st.title) y += drawText(ctx, st.service, W / 2, y + 40, { size: story ? 46 : 40, color: T.text, maxLines: 1, weight: BW });
-        if (st.price) {
-          const big = story ? 170 : 136;
-          y += big + (story ? 40 : 20);
-          ctx.fillStyle = T.accent; ctx.font = font(big); ltrText(ctx, price(st.price), W / 2, y, 'center');
-          if (st.oldPrice) {
-            const s2 = story ? 58 : 50, txt = 'במקום ' + price(st.oldPrice);
-            ctx.font = font(s2, BW); ctx.fillStyle = T.text; ctx.globalAlpha = 0.6;
-            const tw = ctx.measureText(txt).width; y += s2 + 24;
-            ctx.textAlign = 'center'; ctx.fillText(txt, W / 2, y);
-            const pw = ctx.measureText(price(st.oldPrice)).width;
-            ctx.fillRect(W / 2 - tw / 2, y - s2 * 0.32, pw + 4, 3); // strike through the old price (left part in RTL)
-            ctx.globalAlpha = 1;
+        const lh = logoBlock(ctx, st, W / 2, story ? 250 : 64, story ? 440 : 340, T.logo);
+        const y1 = (story ? 250 : 64) + lh + (story ? 120 : 70), by = story ? 1430 : 1150;
+        grp(ctx, st, 'text', W / 2, (y1 + by - 60) / 2, () => {
+          let y = y1;
+          y += pill(ctx, st.label || 'מבצע', W / 2, y, story ? 40 : 34, T, false) + (story ? 70 : 50);
+          if (st.title) y += drawText(ctx, st.title, W / 2, y + (story ? 70 : 60), { size: story ? 100 : 84, color: T.text, maxLines: 2 }) + 10;
+          if (st.service && st.service !== st.title) y += drawText(ctx, st.service, W / 2, y + 40, { size: story ? 46 : 40, color: T.text, maxLines: 1, weight: BW });
+          if (st.price) {
+            const big = story ? 170 : 136;
+            y += big + (story ? 40 : 20);
+            ctx.fillStyle = T.accent; ctx.font = font(big); ltrText(ctx, price(st.price), W / 2, y, 'center');
+            if (st.oldPrice) {
+              const s2 = story ? 58 : 50, txt = 'במקום ' + price(st.oldPrice);
+              ctx.font = font(s2, BW); ctx.fillStyle = T.text; ctx.globalAlpha = 0.6;
+              const tw = ctx.measureText(txt).width; y += s2 + 24;
+              ctx.textAlign = 'center'; ctx.fillText(txt, W / 2, y);
+              const pw = ctx.measureText(price(st.oldPrice)).width;
+              ctx.fillRect(W / 2 - tw / 2, y - s2 * 0.32, pw + 4, 3); // strike through the old price (left part in RTL)
+              ctx.globalAlpha = 1;
+            }
           }
-        }
-        if (st.valid) y += drawText(ctx, st.valid, W / 2, y + (story ? 90 : 70), { size: story ? 42 : 36, color: T.text, maxLines: 1, weight: BW });
-        const by = story ? 1430 : 1150;
-        pill(ctx, st.cta || CTA, W / 2, by, story ? 42 : 36, T, true);
-        if (st.handle) { ctx.fillStyle = T.text; ctx.globalAlpha = 0.7; ctx.font = '34px "Josefin Sans"'; ltrText(ctx, '@' + st.handle.replace(/^@/, ''), W / 2, by + (story ? 140 : 120), 'center'); ctx.globalAlpha = 1; }
+          if (st.valid) y += drawText(ctx, st.valid, W / 2, y + (story ? 90 : 70), { size: story ? 42 : 36, color: T.text, maxLines: 1, weight: BW });
+          return { x: 120, y: y1, w: 840, h: y - y1 + 30 };
+        });
+        grp(ctx, st, 'cta', W / 2, by + (story ? 60 : 50), () => {
+          const ph = pill(ctx, st.cta || CTA, W / 2, by, story ? 42 : 36, T, true), pw = lastPillW;
+          if (st.handle) { ctx.fillStyle = T.text; ctx.globalAlpha = 0.7; ctx.font = '34px "Josefin Sans"'; ltrText(ctx, '@' + st.handle.replace(/^@/, ''), W / 2, by + (story ? 140 : 120), 'center'); ctx.globalAlpha = 1; }
+          const w = Math.max(pw, 320);
+          return { x: W / 2 - w / 2, y: by, w, h: st.handle ? (story ? 155 : 135) : ph };
+        });
       },
     },
     // ---- shade of the week (nails) ----
@@ -351,14 +419,17 @@
         const S = sizeOf(st), story = S.h === 1920, W = 1080;
         bgFill(ctx, st, T);
         const nw = story ? 300 : 230, nh = nw * 1.72, ny = story ? 260 : 90;
-        nail(ctx, W / 2, ny, nw, nh, st.shadeColor || '#C9B5DB');
-        let y = ny + nh + (story ? 110 : 80);
-        drawText(ctx, st.label || 'הגוון של השבוע', W / 2, y, { size: story ? 44 : 38, color: T.accent, maxLines: 1 });
-        y += story ? 130 : 110;
-        y += drawText(ctx, st.shadeName || 'שם הגוון', W / 2, y, { size: story ? 112 : 92, color: T.text, maxLines: 2 });
-        if (st.note) drawText(ctx, st.note, W / 2, y + 10, { size: story ? 42 : 36, color: T.text, maxLines: 2, weight: BW });
-        const lw = story ? 440 : 360, lh = lw * REF;
-        drawLogo(ctx, W / 2, story ? 1580 - lh : 1350 - 60 - lh, lw, T.logo);
+        const lw = story ? 440 : 360, lh = lw * REF, logoTop = story ? 1580 - lh : 1350 - 60 - lh;
+        grp(ctx, st, 'text', W / 2, (ny + logoTop - 60) / 2, () => {
+          nail(ctx, W / 2, ny, nw, nh, st.shadeColor || '#C9B5DB');
+          let y = ny + nh + (story ? 110 : 80);
+          drawText(ctx, st.label || 'הגוון של השבוע', W / 2, y, { size: story ? 44 : 38, color: T.accent, maxLines: 1 });
+          y += story ? 130 : 110;
+          y += drawText(ctx, st.shadeName || 'שם הגוון', W / 2, y, { size: story ? 112 : 92, color: T.text, maxLines: 2 });
+          if (st.note) y += 10 + drawText(ctx, st.note, W / 2, y + 10, { size: story ? 42 : 36, color: T.text, maxLines: 2, weight: BW });
+          return { x: 140, y: ny, w: 800, h: y - ny };
+        });
+        logoBlock(ctx, st, W / 2, logoTop, lw, T.logo);
       },
     },
     // ---- client review ----
@@ -367,18 +438,22 @@
       under(ctx, st, T) {
         const S = sizeOf(st), story = S.h === 1920, W = 1080;
         bgFill(ctx, st, T);
-        const lw = story ? 440 : 360;
-        drawLogo(ctx, W / 2, story ? 250 : 64, lw, T.logo);
+        logoBlock(ctx, st, W / 2, story ? 250 : 64, story ? 440 : 360, T.logo);
         const text = st.reviewText || 'כאן נכנסת ההמלצה של הלקוחה';
         const f = fitText(ctx, text, 860, story ? 66 : 56, story ? 7 : 6, 0.55, BW), lineH = f.size * 1.4;
         const blockH = f.lines.length * lineH;
         const mid = story ? 900 : 660, y0 = mid - blockH / 2 + f.size;
-        ctx.fillStyle = T.accent; ctx.font = `${story ? 300 : 240}px "Josefin Sans"`; ctx.textAlign = 'center';
-        ctx.fillText('”', W / 2, y0 - f.size * 0.4 - (story ? 10 : 0));
-        ctx.fillStyle = T.text; ctx.font = font(f.size, BW); ctx.textAlign = 'center';
-        f.lines.forEach((l, i) => ctx.fillText(l, W / 2, y0 + (story ? 120 : 90) + i * lineH));
+        const qs = story ? 300 : 240, qy = y0 - f.size * 0.4 - (story ? 10 : 0), top = qy - qs * 0.72;
         const ny = y0 + (story ? 120 : 90) + blockH + (story ? 50 : 30);
-        if (st.reviewName) drawText(ctx, st.reviewName, W / 2, ny, { size: story ? 46 : 40, color: T.accent, maxLines: 1 });
+        const end = st.reviewName ? ny + 20 : ny - (story ? 50 : 30);
+        grp(ctx, st, 'text', W / 2, (top + end) / 2, () => {
+          ctx.fillStyle = T.accent; ctx.font = `${qs}px "Josefin Sans"`; ctx.textAlign = 'center';
+          ctx.fillText('”', W / 2, qy);
+          ctx.fillStyle = T.text; ctx.font = font(f.size, BW); ctx.textAlign = 'center';
+          f.lines.forEach((l, i) => ctx.fillText(l, W / 2, y0 + (story ? 120 : 90) + i * lineH));
+          if (st.reviewName) drawText(ctx, st.reviewName, W / 2, ny, { size: story ? 46 : 40, color: T.accent, maxLines: 1 });
+          return { x: 110, y: top, w: 860, h: end - top };
+        });
         footer(ctx, st, T, story ? 1560 : 1270);
       },
     },
@@ -388,21 +463,25 @@
       under(ctx, st, T) {
         const S = sizeOf(st), story = S.h === 1920, W = 1080, R = W - 100;
         bgFill(ctx, st, T);
-        let y = story ? 290 : 110;
-        ctx.font = font(story ? 36 : 32);
-        const pw = ctx.measureText(st.label || 'טיפ').width + (story ? 58 : 52);
-        pill(ctx, st.label || 'טיפ', R - pw / 2, y, story ? 36 : 32, T, false);
-        y += (story ? 70 : 60) + (story ? 120 : 100);
-        y += drawText(ctx, st.tipTitle || 'כותרת הטיפ', R, y, { size: story ? 92 : 80, color: T.text, maxLines: 3, align: 'right', maxW: 880 }) + (story ? 40 : 30);
-        const lines = (st.tipLines || []).map(s => String(s || '').trim()).filter(Boolean).slice(0, 3);
-        lines.forEach((l, i) => {
-          const fs = story ? 48 : 42;
-          ctx.fillStyle = T.accent; ctx.font = font(fs); ctx.textAlign = 'right'; ctx.fillText((i + 1) + '.', R, y);
-          const h = drawText(ctx, l, R - fs * 1.1, y, { size: fs, color: T.text, maxLines: 2, align: 'right', maxW: 820, lh: 1.3, weight: BW });
-          y += h + (story ? 34 : 24);
+        const y0 = story ? 290 : 110;
+        const lw = story ? 440 : 360, lh = lw * REF, logoTop = story ? 1580 - lh : 1350 - 60 - lh;
+        grp(ctx, st, 'text', W / 2, (y0 + logoTop - 80) / 2, () => {
+          let y = y0;
+          ctx.font = font(story ? 36 : 32);
+          const pw = ctx.measureText(st.label || 'טיפ').width + (story ? 58 : 52);
+          pill(ctx, st.label || 'טיפ', R - pw / 2, y, story ? 36 : 32, T, false);
+          y += (story ? 70 : 60) + (story ? 120 : 100);
+          y += drawText(ctx, st.tipTitle || 'כותרת הטיפ', R, y, { size: story ? 92 : 80, color: T.text, maxLines: 3, align: 'right', maxW: 880 }) + (story ? 40 : 30);
+          const lines = (st.tipLines || []).map(s => String(s || '').trim()).filter(Boolean).slice(0, 3);
+          lines.forEach((l, i) => {
+            const fs = story ? 48 : 42;
+            ctx.fillStyle = T.accent; ctx.font = font(fs); ctx.textAlign = 'right'; ctx.fillText((i + 1) + '.', R, y);
+            const h = drawText(ctx, l, R - fs * 1.1, y, { size: fs, color: T.text, maxLines: 2, align: 'right', maxW: 820, lh: 1.3, weight: BW });
+            y += h + (story ? 34 : 24);
+          });
+          return { x: 100, y: y0, w: 880, h: y - y0 };
         });
-        const lw = story ? 440 : 360, lh = lw * REF;
-        drawLogo(ctx, W / 2, story ? 1580 - lh : 1350 - 60 - lh, lw, T.logo);
+        logoBlock(ctx, st, W / 2, logoTop, lw, T.logo);
       },
     },
 
@@ -415,8 +494,8 @@
       },
       under: bgFill,
       over(ctx, st, T, f) {
-        const logoTop = f.y + f.h + 40, lh = drawLogo(ctx, 540, logoTop, 470, T.logo);
-        if (st.caption) drawText(ctx, st.caption, 540, logoTop + lh + 70, { size: 62, maxLines: 1, color: T.text });
+        const logoTop = f.y + f.h + 40, lh = logoBlock(ctx, st, 540, logoTop, 470, T.logo);
+        if (st.caption) textBlock(ctx, st, st.caption, 540, logoTop + lh + 70, { size: 62, maxLines: 1, color: T.text });
       },
     },
     'video:clean': {
@@ -425,21 +504,25 @@
       over(ctx, st, T) {
         const sb = bottomLine(st), top = st.logoPos !== 'bottom';
         const lw = 420, lh = lw * REF, bh = lh + 54;
-        const img = T.logo === 'dark' ? logoDark : logoLight;
-        const realW = img.naturalWidth ? lh * img.naturalWidth / img.naturalHeight : lw;
-        const bw = Math.max(300, realW + 80);
+        const bw = Math.max(300, logoW(T.logo, lw) + 80);
         const by = top ? SAFE.top : sb - bh;
-        ctx.fillStyle = fade(T, 0.94); rr(ctx, 540 - bw / 2, by, bw, bh, Math.min(60, bh / 2)); ctx.fill();
-        drawLogo(ctx, 540, by + (bh - lh) / 2, lw, T.logo);
+        grp(ctx, st, 'logo', 540, by + bh / 2, () => {
+          ctx.fillStyle = fade(T, 0.94); rr(ctx, 540 - bw / 2, by, bw, bh, Math.min(60, bh / 2)); ctx.fill();
+          drawLogo(ctx, 540, by + (bh - lh) / 2, lw, T.logo);
+          return { x: 540 - bw / 2, y: by, w: bw, h: bh };
+        });
         if (st.caption) {
           const f = fitText(ctx, st.caption, 840, 56, 1);
           const tw = ctx.measureText(f.lines[0]).width;
           const ph = Math.round(f.size + 46), pw = Math.min(1000, tw + 96);
           const py = top ? sb - ph : by - 28 - ph;
-          ctx.fillStyle = fade(T, 0.94); rr(ctx, 540 - pw / 2, py, pw, ph, ph / 2); ctx.fill();
-          ctx.fillStyle = T.text; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-          ctx.fillText(f.lines[0], 540, py + ph / 2 + 2);
-          ctx.textBaseline = 'alphabetic';
+          grp(ctx, st, 'text', 540, py + ph / 2, () => {
+            ctx.fillStyle = fade(T, 0.94); rr(ctx, 540 - pw / 2, py, pw, ph, ph / 2); ctx.fill();
+            ctx.font = font(f.size); ctx.fillStyle = T.text; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillText(f.lines[0], 540, py + ph / 2 + 2);
+            ctx.textBaseline = 'alphabetic';
+            return { x: 540 - pw / 2, y: py, w: pw, h: ph };
+          });
         }
       },
     },
@@ -467,14 +550,16 @@
   // video: the fixed layers are cached per canvas and rebuilt only when the design changes
   const layerCache = new WeakMap();
   function layers(canvas, st, key, T, tpl, f, size) {
-    const sig = JSON.stringify([key, st.caption, T.bg, st.logoPos, st.dest, f]);
+    const sig = JSON.stringify([key, st.caption, st.theme, T.bg, st.logoPos, st.dest, st.layout, f]);
     let L = layerCache.get(canvas);
     if (L && L.sig === sig) return L;
     const mk = () => { const c = document.createElement('canvas'); c.width = size.w; c.height = size.h; c.setAttribute('dir', 'rtl'); const x = c.getContext('2d'); try { x.direction = 'rtl'; } catch (e) { /* ok */ } return [c, x]; };
     const [under, uctx] = mk(), [over, octx] = mk();
+    OUT = {};
     tpl.under(uctx, st, T, f);
     if (tpl.over) tpl.over(octx, st, T, f);
-    L = { sig, under, over };
+    L = { sig, under, over, boxes: OUT };
+    OUT = null;
     layerCache.set(canvas, L);
     return L;
   }
@@ -487,22 +572,26 @@
     const ctx = canvas.getContext('2d');
     try { ctx.direction = 'rtl'; } catch (e) { /* older browsers: canvas dir attribute is enough */ }
     const key = keyFor(st), T = themeFor(st, key), tpl = TEMPLATES[key];
+    CANVAS = size;
     st = Object.assign({}, st, { logoPos: st.logoPos || DEFAULT_LOGO_POS[key] || 'bottom' });
     const f = tpl.frame(st);
-    let off = { x: 0, y: 0, mx: 0, my: 0 };
+    let off = { x: 0, y: 0, mx: 0, my: 0 }, boxes;
     if (isVideo(st.photo)) {
       const L = layers(canvas, st, key, T, tpl, f, size);
+      boxes = L.boxes;
       ctx.drawImage(L.under, 0, 0);
       if (f) off = photoIn(ctx, st, f, T);
       ctx.drawImage(L.over, 0, 0);
     } else {
       ctx.clearRect(0, 0, size.w, size.h);
+      OUT = boxes = {};
       tpl.under(ctx, st, T, f);
       if (f) off = photoIn(ctx, st, f, T);
       if (tpl.over) tpl.over(ctx, st, T, f);
+      OUT = null;
     }
     if (st.kind === 'video' && st.endAlpha > 0) endCard(ctx, st, T, st.endAlpha);
-    return { photoRect: f, offset: off };
+    return { photoRect: f, offset: off, boxes };
   }
 
   /* Downscale very large photos so phones stay fast; keeps EXIF orientation (applied by the browser). */
