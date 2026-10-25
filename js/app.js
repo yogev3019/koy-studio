@@ -1,27 +1,30 @@
-/* KOY Studio — app logic. All data stays on the device (localStorage). Hebrew UI, RTL. */
+/* Studio core — app logic (shared by KOY Studio and AK Studio; brand details come from js/brand.js).
+   All data stays on the device (localStorage). Hebrew UI, RTL.
+   Nothing about the business is assumed: the owner enters her services, prices, days and hours, and can edit
+   everything at any time on her own (Settings, and edit buttons next to each design).
+   Source of truth: Desktop/STUDIO_CORE/core — copy into each app with STUDIO_CORE/sync.js. */
 (function () {
   'use strict';
+  const B = window.BRAND;
   const $ = s => document.querySelector(s);
   const $$ = s => [...document.querySelectorAll(s)];
-  const KEY = 'koy-studio-v1';
   const DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 
   // ---------- state ----------
-  const DEFAULT_SCHEDULE = {
-    0: { works: true, from: '', label: 'בתיאום' },
-    1: { works: true, from: '16:30', label: '' },
-    2: { works: true, from: '16:30', label: '' },
-    3: { works: true, from: '', label: 'בתיאום' },
-    4: { works: true, from: '16:30', label: '' },
-    5: { works: true, from: '', label: 'מהבוקר' },
-    6: { works: false, from: '', label: '' },
-  };
+  const EMPTY_SCHEDULE = () => { const s = {}; for (let i = 0; i < 7; i++) s[i] = { works: false, from: '', to: '' }; return s; };
   function fresh() {
-    return { v: 1, clients: [], appts: [], overrides: {}, schedule: JSON.parse(JSON.stringify(DEFAULT_SCHEDULE)), lastBackup: null, prefs: { kind: 'story', design: { story: 'window', post: 'band' } }, dismiss: {} };
+    return {
+      v: 2, clients: [], appts: [], overrides: {}, schedule: EMPTY_SCHEDULE(), lastBackup: null,
+      biz: { handle: '', phone: '', cta: '', services: [], phrases: B.PHRASES.slice(), setupDone: false },
+      prefs: { type: 'photo', format: 'story', design: { story: 'window', post: 'band', video: 'full' } },
+      drafts: {}, dismiss: {},
+    };
   }
   let S;
-  try { S = Object.assign(fresh(), JSON.parse(localStorage.getItem(KEY) || 'null') || {}); } catch (e) { S = fresh(); }
-  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('לא הצלחתי לשמור. אולי הזיכרון בטלפון מלא.'); } };
+  try { S = Object.assign(fresh(), JSON.parse(localStorage.getItem(B.KEY) || 'null') || {}); } catch (e) { S = fresh(); }
+  S.biz = Object.assign(fresh().biz, S.biz);
+  if (B.migrate) B.migrate(S, EMPTY_SCHEDULE);
+  const save = () => { try { localStorage.setItem(B.KEY, JSON.stringify(S)); } catch (e) { toast('לא הצלחתי לשמור. אולי הזיכרון בטלפון מלא.'); } };
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 
   // ---------- helpers ----------
@@ -34,18 +37,22 @@
   const startOfWeek = d => { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() - x.getDay()); return x; };
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const clientById = id => S.clients.find(c => c.id === id);
-  const hoursText = sch => sch.from ? `מ-${sch.from}` : (sch.label || 'עובדת');
+  const svcById = id => S.biz.services.find(s => s.id === id);
+  // hours: "10:00-18:00" (plain hyphen: an en dash flips in Hebrew), "מ-10:00", or "בתיאום"
+  const hoursText = sch => sch.from && sch.to ? `${sch.from}-${sch.to}` : sch.from ? `מ-${sch.from}` : 'בתיאום';
+  const fmtPrice = p => { const v = String(p ?? '').trim(); return /^\d+([.,]\d+)?$/.test(v) ? '₪' + v : v; };
+  const cta = () => S.biz.cta || STUDIO.CTA;
 
   let toastT;
   function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2600); }
 
   function openSheet(html, onMount) {
-    $('#sheet').innerHTML = html; $('#modal').classList.remove('hidden');
+    $('#sheet').innerHTML = html; delete $('#sheet').dataset.lock; $('#modal').classList.remove('hidden');
     document.body.style.overflow = 'hidden';
     if (onMount) onMount($('#sheet'));
   }
-  function closeSheet() { $('#modal').classList.add('hidden'); $('#sheet').innerHTML = ''; document.body.style.overflow = ''; }
-  $('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeSheet(); });
+  function closeSheet() { $('#modal').classList.add('hidden'); $('#sheet').innerHTML = ''; delete $('#sheet').dataset.lock; document.body.style.overflow = ''; }
+  $('#modal').addEventListener('click', e => { if (e.target.id === 'modal' && !$('#sheet').dataset.lock) closeSheet(); });
 
   function confirmBox(text, yes = 'כן', no = 'ביטול') {
     return new Promise(res => {
@@ -75,60 +82,224 @@
     if (name === 'calendar') renderCalendar();
     if (name === 'clients') renderClients();
     if (name === 'settings') renderSettings();
-    if (name === 'create') refreshClientSelect();
+    if (name === 'create') { refreshClientSelect(); refreshUI(); }
     ensureLoop();
   }
   $$('.bottom button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
   $('#btnSettings').onclick = () => showTab('settings');
 
   // =====================================================================
+  // BUSINESS DATA: services and prices, days and hours, details — all editable by the owner
+  // =====================================================================
+  const steps = n => n ? `<div class="steps">${[1, 2, 3].map(i => `<i class="${i <= n ? 'on' : ''}"></i>`).join('')}</div>` : '';
+
+  // services editor (also step 1 of the first-run setup)
+  function servicesSheet(onDone, step) {
+    const list = S.biz.services.map(s => Object.assign({}, s));
+    openSheet(`${steps(step)}<h3>השירותים והמחירים שלך</h3>
+      <p class="fine">לחצי על שירות כדי להוסיף אותו, וכתבי מחיר. אפשר לשנות, להוסיף ולמחוק בכל זמן.</p>
+      <div class="chips" id="svcSuggest"></div>
+      <div id="svcList"></div>
+      <button class="btn ghost small" id="svcAdd">+ שירות אחר</button>
+      <div class="actions"><button class="btn primary" id="svcSave">${step ? 'הבא' : 'שמירה'}</button>${step ? '<button class="btn ghost" id="svcSkip">דלגי בינתיים</button>' : '<button class="btn ghost" id="svcCancel">ביטול</button>'}</div>`, sh => {
+      if (step) sh.dataset.lock = '1';
+      const renderList = () => {
+        const box = sh.querySelector('#svcList');
+        box.innerHTML = list.length ? '' : '<p class="fine">עוד אין שירותים.</p>';
+        list.forEach(s => {
+          const row = document.createElement('div'); row.className = 'svcRow';
+          row.innerHTML = `<input class="field nm" maxlength="30" placeholder="שם השירות" value="${esc(s.name)}"><input class="field pr ltrIn" inputmode="decimal" maxlength="12" placeholder="₪" value="${esc(s.price)}"><button class="del" aria-label="הסרה">×</button>`;
+          const [nm, pr] = row.querySelectorAll('input');
+          nm.oninput = () => { s.name = nm.value; renderSuggest(); };
+          pr.oninput = () => { s.price = pr.value.replace(/₪/g, ''); }; // free text allowed, e.g. "החל מ-20"
+          row.querySelector('.del').onclick = () => { list.splice(list.indexOf(s), 1); renderList(); renderSuggest(); };
+          box.appendChild(row);
+        });
+      };
+      const renderSuggest = () => {
+        const box = sh.querySelector('#svcSuggest'); box.innerHTML = '';
+        B.SVC_SUGGEST.filter(n => !list.some(s => s.name.trim() === n)).forEach(n => {
+          const b = document.createElement('button'); b.className = 'chip'; b.textContent = '+ ' + n;
+          b.onclick = () => { list.push({ id: uid(), name: n, price: '' }); renderList(); renderSuggest(); const ins = sh.querySelectorAll('.svcRow .pr'); if (ins.length) ins[ins.length - 1].focus(); };
+          box.appendChild(b);
+        });
+      };
+      renderList(); renderSuggest();
+      sh.querySelector('#svcAdd').onclick = () => { list.push({ id: uid(), name: '', price: '' }); renderList(); const ins = sh.querySelectorAll('.svcRow .nm'); ins[ins.length - 1].focus(); };
+      const done = () => { closeSheet(); afterBizChange(); if (onDone) onDone(); };
+      sh.querySelector('#svcSave').onclick = () => { S.biz.services = list.filter(s => s.name.trim()).map(s => ({ id: s.id, name: s.name.trim(), price: String(s.price || '').trim() })); save(); if (!step) toast('השירותים נשמרו ✓'); done(); };
+      const sk = sh.querySelector('#svcSkip'); if (sk) sk.onclick = done;
+      const cn = sh.querySelector('#svcCancel'); if (cn) cn.onclick = () => closeSheet();
+    });
+  }
+  // days and hours rows (setup step 2, the hours editor and Settings)
+  function schedRows(box, sched, live) {
+    box.innerHTML = '';
+    for (let i = 0; i < 7; i++) {
+      const s = sched[i];
+      const row = document.createElement('div'); row.className = 'sched';
+      row.innerHTML = `<input type="checkbox" ${s.works ? 'checked' : ''} aria-label="עובדת ביום ${DAYS[i]}"><span class="dn">${DAYS[i]}</span>
+        <input class="field from" type="time" value="${esc(s.from)}" aria-label="משעה" ${s.works ? '' : 'disabled'}><span class="dash">עד</span>
+        <input class="field to" type="time" value="${esc(s.to || '')}" aria-label="עד שעה" ${s.works ? '' : 'disabled'}>`;
+      const [cb, from, to] = row.querySelectorAll('input');
+      cb.onchange = () => { s.works = cb.checked; from.disabled = to.disabled = !cb.checked; if (live) save(); };
+      from.onchange = () => { s.from = from.value; if (live) save(); };
+      to.onchange = () => { s.to = to.value; if (live) save(); };
+      box.appendChild(row);
+    }
+  }
+  // hours editor: step 2 of the setup, or on its own (from the open-slots card)
+  function hoursSheet(onDone, step) {
+    const draft = JSON.parse(JSON.stringify(S.schedule));
+    openSheet(`${steps(step)}<h3>מתי את עובדת?</h3><p class="fine">מסמנים ימי עבודה ושעות. ככה היומן והתורים הפנויים יודעים לבד. שעות שלא ממלאים יופיעו "בתיאום". אפשר לשנות בכל זמן.</p><div id="wzSched"></div>
+      <div class="actions"><button class="btn primary" id="hrSave">${step ? 'הבא' : 'שמירה'}</button><button class="btn ghost" id="hrSkip">${step ? 'דלגי בינתיים' : 'ביטול'}</button></div>`, sh => {
+      if (step) sh.dataset.lock = '1';
+      schedRows(sh.querySelector('#wzSched'), draft, false);
+      sh.querySelector('#hrSave').onclick = () => { S.schedule = draft; save(); closeSheet(); if (!step) { toast('הימים והשעות נשמרו ✓'); afterBizChange(); } if (onDone) onDone(); };
+      sh.querySelector('#hrSkip').onclick = () => { closeSheet(); if (onDone && step) onDone(); };
+    });
+  }
+  const ctaList = phone => ['לקביעת תור בהודעה', 'לקביעת תור בוואטסאפ', phone ? `לקביעת תור: ${phone}` : '', 'קישור לתורים בביו'].filter(Boolean);
+  function detailsSheet(onDone, step) {
+    openSheet(`${steps(step)}<h3>פרטים לעיצובים</h3><p class="fine">לא חובה. מה שתכתבי כאן יופיע בתחתית העיצובים, ואפשר לשנות בכל זמן בהגדרות.</p>
+      <label class="f">שם המשתמש באינסטגרם</label><input class="field ltrIn" id="wzHandle" maxlength="30" placeholder="${esc(B.HANDLE_HINT)}" autocapitalize="off" value="${esc(S.biz.handle)}">
+      <label class="f">טלפון לקביעת תורים</label><input class="field ltrIn" id="wzPhone" type="tel" inputmode="tel" maxlength="16" placeholder="050-0000000" value="${esc(S.biz.phone)}">
+      <label class="f">מה כתוב בסוף העיצובים</label><div class="chips" id="wzCta"></div>
+      <div class="actions"><button class="btn primary" id="wzDone">סיום</button></div>`, sh => {
+      sh.dataset.lock = '1';
+      let pick = cta();
+      const renderCta = () => {
+        const box = sh.querySelector('#wzCta'); box.innerHTML = '';
+        ctaList(sh.querySelector('#wzPhone').value.trim()).forEach(t => {
+          const b = document.createElement('button'); b.className = 'chip' + (t === pick ? ' on' : ''); b.textContent = t;
+          b.onclick = () => { pick = t; renderCta(); }; box.appendChild(b);
+        });
+      };
+      renderCta();
+      sh.querySelector('#wzPhone').oninput = renderCta;
+      sh.querySelector('#wzDone').onclick = () => {
+        S.biz.handle = sh.querySelector('#wzHandle').value.trim().replace(/^@/, '');
+        S.biz.phone = sh.querySelector('#wzPhone').value.trim();
+        S.biz.cta = pick === STUDIO.CTA ? '' : pick;
+        save(); closeSheet(); onDone();
+      };
+    });
+  }
+  // her own ready phrases for photo and video captions
+  function phrasesSheet() {
+    const list = S.biz.phrases.slice();
+    openSheet(`<h3>המשפטים המוכנים שלי</h3><p class="fine">המשפטים שמופיעים כשבוחרים טקסט לתמונה או לסרטון. אפשר לשנות, להוסיף ולמחוק.</p><div id="phList"></div>
+      <button class="btn ghost small" id="phAdd">+ משפט חדש</button>
+      <div class="actions"><button class="btn primary" id="phSave">שמירה</button><button class="btn ghost" id="phCancel">ביטול</button></div>`, sh => {
+      const render = () => {
+        const box = sh.querySelector('#phList'); box.innerHTML = '';
+        list.forEach((p, i) => {
+          const row = document.createElement('div'); row.className = 'svcRow';
+          row.innerHTML = `<input class="field nm" maxlength="40" value="${esc(p)}" placeholder="משפט"><button class="del" aria-label="הסרה">×</button>`;
+          row.querySelector('input').oninput = e => { list[i] = e.target.value; };
+          row.querySelector('.del').onclick = () => { list.splice(i, 1); render(); };
+          box.appendChild(row);
+        });
+      };
+      render();
+      sh.querySelector('#phAdd').onclick = () => { list.push(''); render(); const ins = sh.querySelectorAll('#phList input'); ins[ins.length - 1].focus(); };
+      sh.querySelector('#phSave').onclick = () => { S.biz.phrases = list.map(p => p.trim()).filter(Boolean); save(); closeSheet(); afterBizChange(); toast('המשפטים נשמרו ✓'); };
+      sh.querySelector('#phCancel').onclick = closeSheet;
+    });
+  }
+  // iPhone: the home-screen app keeps its own storage, separate from Safari — install first, then fill in
+  function installFirstSheet(next) {
+    openSheet(`<h3>רגע לפני שמתחילים</h3>
+      <p>באייפון מתקינים קודם את האפליקציה במסך הבית, ורק אחר כך ממלאים פרטים. מה שממלאים כאן בספארי לא עובר לאפליקציה המותקנת.</p>
+      <ol class="fine instList"><li>לוחצים על כפתור השיתוף (ריבוע עם חץ) בספארי</li><li>בוחרים "הוספה למסך הבית"</li><li>פותחים את האפליקציה מהאייקון החדש, וממשיכים משם</li></ol>
+      <div class="actions"><button class="btn primary" id="instOk">הבנתי, אתקין עכשיו</button><button class="btn ghost" id="instHere">להמשיך כאן בכל זאת</button></div>`, sh => {
+      sh.dataset.lock = '1';
+      sh.querySelector('#instOk').onclick = () => { closeSheet(); toast('אחרי ההתקנה פותחים מהאייקון במסך הבית'); };
+      sh.querySelector('#instHere').onclick = () => { S.dismiss.iosInstall = Date.now(); save(); closeSheet(); next(); };
+    });
+  }
+  function setupWizard() {
+    const go = () => servicesSheet(() => hoursSheet(() => detailsSheet(() => {
+      S.biz.setupDone = true; save(); afterBizChange();
+      toast('הכול מוכן ✨ אפשר להתחיל ליצור');
+    }, 3), 2), 1);
+    if (isIOS() && !isStandalone() && !S.dismiss.iosInstall) installFirstSheet(go); else go();
+  }
+  function afterBizChange() { renderChips(); fillForms(); banners(); if ($('#tab-settings').classList.contains('active')) renderSettings(); refreshUI(); }
+
+  // =====================================================================
   // CREATE
   // =====================================================================
+  const PHOTO_KINDS = ['story', 'post'];
+  const TEXT = STUDIO.TEXT_KINDS;
+  const D = S.drafts || {};
   const C = {
-    kind: S.prefs.kind || 'story',
+    type: B.TILES.includes(S.prefs.type) ? S.prefs.type : 'photo', format: S.prefs.format || 'story',
     design: Object.assign({ story: 'window', post: 'band', video: 'full' }, S.prefs.design),
     photo: null, video: null, x: 0, y: 0, zoom: 1, mx: 0, my: 0, pendingBias: false,
-    // logo position per design, e.g. { 'story:full': 'bottom', 'video:clean': 'top' } (version 1.1 kept a single value)
     logoPos: typeof S.prefs.logoPos === 'string' ? { 'story:full': S.prefs.logoPos } : Object.assign({}, S.prefs.logoPos),
-    theme: Object.assign({}, S.prefs.theme), // one color per design, e.g. { 'story:full': 'cocoa' }
+    theme: Object.assign({}, S.prefs.theme),
     dest: S.prefs.dest || 'story', endCard: S.prefs.endCard !== false, keepSound: S.prefs.keepSound !== false,
     chip: '', custom: '',
-    slots: ['', '', '', '', ''],
+    slots: ['', '', '', '', '', ''],
+    // drafts of the data designs, kept between visits
+    pr: Object.assign({ title: '', note: '', off: {} }, D.pr),
+    pm: Object.assign({ label: 'מבצע', serviceId: '', title: '', price: '', old: '', valid: '' }, D.pm),
+    sh: Object.assign({ color: '#C9B5DB', name: '', note: '' }, D.sh),
+    rv: Object.assign({ text: '', name: '' }, D.rv),
+    tp: Object.assign({ title: '', lines: ['', '', ''] }, D.tp),
   };
-  const CHIPS = ['זוהר לפני האירוע ✨', 'עוד לקוחה זוהרת 🤎', 'שיזוף בהתזה', 'לקביעת תור בהודעה'];
+  let draftT;
+  const saveDrafts = () => { clearTimeout(draftT); draftT = setTimeout(() => { S.drafts = { pr: C.pr, pm: C.pm, sh: C.sh, rv: C.rv, tp: C.tp }; save(); }, 300); };
   const DESIGNS = {
     story: [['window', 'חלון'], ['full', 'מסך מלא']],
     post: [['band', 'פס תחתון'], ['window', 'חלון']],
     video: [['full', 'מסך מלא'], ['window', 'חלון'], ['clean', 'נקי']],
   };
   const END_SEC = 2; // video end card
-  const CAN_VIDEO = !!KOYVideo.pickMime();
+  const CAN_VIDEO = !!StudioVideo.pickMime();
   const preview = $('#preview');
   let lastLayout = null;
+  // only the tiles of this brand (e.g. "shade of the week" is for nails)
+  $$('#typeGrid .type').forEach(b => { if (!B.TILES.includes(b.dataset.type)) b.remove(); });
 
-  const media = () => (C.kind === 'video' ? C.video : C.kind === 'slots' ? null : C.photo);
+  const kind = () => (C.type === 'photo' ? C.format : C.type);
+  const media = () => { const k = kind(); return k === 'video' ? C.video : PHOTO_KINDS.includes(k) ? C.photo : null; };
   const fmtSec = s => { const t = Math.round(s); return `${Math.floor(t / 60)}:${pad(t % 60)}`; };
   function caption() {
-    if (C.kind === 'post' && C.design.post === 'window') return '';
+    const k = kind();
+    if (!PHOTO_KINDS.includes(k) && k !== 'video') return '';
+    if (k === 'post' && C.design.post === 'window') return '';
     return (C.custom.trim() || C.chip || '').trim();
   }
-  const designKey = (kind, design) => (kind === 'slots' ? 'slots:main' : `${kind}:${design}`);
-  const curKey = () => designKey(C.kind, C.design[C.kind]);
-  const themeOf = (kind, design) => { const k = designKey(kind, design); return C.theme[k] || KOY.DEFAULT_THEME[k]; };
-  const logoPosOf = key => C.logoPos[key] || KOY.DEFAULT_LOGO_POS[key] || 'bottom';
+  const designKey = (k, design) => (k === 'slots' || TEXT.includes(k) ? k + ':main' : `${k}:${design}`);
+  const curKey = () => designKey(kind(), C.design[kind()]);
+  const themeOf = key => C.theme[key] || STUDIO.DEFAULT_THEME[key];
+  const logoPosOf = key => C.logoPos[key] || STUDIO.DEFAULT_LOGO_POS[key] || 'bottom';
+  const priceItems = () => S.biz.services.filter(s => !C.pr.off[s.id] && s.name.trim()).map(s => ({ name: s.name, price: s.price }));
   function state() {
-    return {
-      kind: C.kind, design: C.design[C.kind], photo: media(), x: C.x, y: C.y, zoom: C.zoom, caption: caption(), slots: C.slots,
-      logoPos: logoPosOf(curKey()), theme: themeOf(C.kind, C.design[C.kind]), dest: C.dest,
+    const k = kind(), key = curKey();
+    const st = {
+      kind: k, format: C.format, design: C.design[k], photo: media(), x: C.x, y: C.y, zoom: C.zoom, caption: caption(), slots: C.slots,
+      logoPos: logoPosOf(key), theme: themeOf(key), dest: C.dest, cta: cta(), handle: S.biz.handle,
     };
+    if (k === 'prices') Object.assign(st, { title: C.pr.title.trim(), note: C.pr.note.trim(), items: priceItems() });
+    if (k === 'promo') {
+      const sv = svcById(C.pm.serviceId), t = C.pm.title.trim();
+      Object.assign(st, { label: C.pm.label, title: t || (sv ? sv.name : ''), service: t && sv ? sv.name : '', price: C.pm.price.trim(), oldPrice: C.pm.old.trim(), valid: C.pm.valid.trim() });
+    }
+    if (k === 'shade') Object.assign(st, { shadeColor: C.sh.color, shadeName: C.sh.name.trim(), note: C.sh.note.trim() });
+    if (k === 'review') Object.assign(st, { reviewText: C.rv.text.trim(), reviewName: C.rv.name.trim() });
+    if (k === 'tip') Object.assign(st, { tipTitle: C.tp.title.trim(), tipLines: C.tp.lines });
+    return st;
   }
   function renderNow() {
-    lastLayout = KOY.render(preview, state());
+    lastLayout = STUDIO.render(preview, state());
     if (lastLayout && lastLayout.offset) {
       const o = lastLayout.offset;
       C.x = o.x; C.y = o.y; C.mx = o.mx || 0; C.my = o.my || 0;
-      // new portrait photo or video: start a little higher, since faces usually sit in the top part
-      if (C.pendingBias && media()) { C.pendingBias = false; if (C.my > 0) { C.y = C.my * 0.55; renderNow(); } }
+      // new portrait photo or video: start a little higher (faces and hands usually sit above the middle)
+      if (C.pendingBias && media()) { C.pendingBias = false; if (C.my > 0) { C.y = C.my * B.PHOTO_BIAS; renderNow(); } }
     }
   }
   let raf = 0;
@@ -139,7 +310,7 @@
 
   // video: the preview keeps playing inside the design while the editor is on screen
   let vraf = 0, finalMode = null;
-  const editorLive = () => C.kind === 'video' && !!C.video && !finalMode && !document.hidden && $('#tab-create').classList.contains('active');
+  const editorLive = () => kind() === 'video' && !!C.video && !finalMode && !document.hidden && $('#tab-create').classList.contains('active');
   function vtick() { vraf = 0; if (!editorLive()) return; renderNow(); vraf = requestAnimationFrame(vtick); }
   function ensureLoop() {
     if (!C.video) return;
@@ -153,32 +324,34 @@
 
   function renderDesigns() {
     const box = $('#designs'); box.innerHTML = '';
-    if (C.kind === 'slots') return;
-    box.classList.toggle('three', DESIGNS[C.kind].length === 3);
-    for (const [id, label] of DESIGNS[C.kind]) {
+    const k = kind();
+    if (!DESIGNS[k]) return;
+    box.classList.toggle('three', DESIGNS[k].length === 3);
+    for (const [id, label] of DESIGNS[k]) {
       const b = document.createElement('button');
-      b.className = 'design' + (C.design[C.kind] === id ? ' on' : '');
+      b.className = 'design' + (C.design[k] === id ? ' on' : '');
       b.dataset.design = id;
       const full = document.createElement('canvas');
-      KOY.render(full, { kind: C.kind, design: id, photo: media(), x: C.x, y: C.y, zoom: C.zoom, caption: '', logoPos: logoPosOf(designKey(C.kind, id)), theme: themeOf(C.kind, id), dest: C.dest });
+      STUDIO.render(full, { kind: k, design: id, photo: media(), x: C.x, y: C.y, zoom: C.zoom, caption: '', logoPos: logoPosOf(designKey(k, id)), theme: themeOf(designKey(k, id)), dest: C.dest });
       const mini = document.createElement('canvas');
       mini.width = 216; mini.height = Math.round(216 * full.height / full.width);
       mini.getContext('2d').drawImage(full, 0, 0, mini.width, mini.height);
       b.appendChild(mini);
       const s = document.createElement('span'); s.textContent = label; b.appendChild(s);
-      b.onclick = () => { C.design[C.kind] = id; S.prefs.design = C.design; save(); renderDesigns(); renderTextCard(); updateLogoRow(); renderSwatches(); renderVideoCard(); draw(); };
+      b.onclick = () => { C.design[k] = id; S.prefs.design = C.design; save(); renderDesigns(); renderTextCard(); updateLogoRow(); renderSwatches(); renderVideoCard(); draw(); };
       box.appendChild(b);
     }
   }
   // Color choice from the approved palette; remembered separately for each design
   function renderSwatches() {
     const box = $('#swatches'); box.innerHTML = '';
-    const cur = themeOf(C.kind, C.design[C.kind]), k = curKey();
-    const light = C.kind === 'video' ? 'סרטון בהיר' : 'תמונה בהירה';
-    $('#colorHint').textContent = k === 'story:full' || k === 'video:full'
+    const key = curKey(), cur = themeOf(key), k = kind();
+    const light = k === 'video' ? 'סרטון בהיר' : 'תמונה בהירה';
+    $('#colorHint').textContent = key === 'story:full' || key === 'video:full'
       ? `הצבע של הפס התחתון, מאחורי הלוגו. ${light}? נסי צבע כהה.`
-      : k === 'video:clean' ? 'הצבע של התג עם הלוגו ושל הטקסט.' : `${light}? נסי רקע כהה, כדי שהיא תבלוט.`;
-    for (const [id, t] of Object.entries(KOY.THEMES)) {
+      : key === 'video:clean' ? 'הצבע של התג עם הלוגו ושל הטקסט.'
+        : PHOTO_KINDS.includes(k) ? `${light}? נסי רקע כהה, כדי שהיא תבלוט.` : 'צבע הרקע של העיצוב.';
+    for (const [id, t] of Object.entries(STUDIO.THEMES)) {
       const b = document.createElement('button');
       b.className = 'swatch' + (id === cur ? ' on' : '');
       b.dataset.theme = id;
@@ -187,41 +360,40 @@
       dot.style.background = t.bg; dot.style.color = t.text; dot.textContent = 'א';
       const s = document.createElement('span'); s.textContent = t.name;
       b.append(dot, s);
-      b.onclick = () => {
-        C.theme[curKey()] = id; S.prefs.theme = C.theme; save();
-        renderSwatches(); renderDesigns(); renderVideoCard(); draw();
-      };
+      b.onclick = () => { C.theme[curKey()] = id; S.prefs.theme = C.theme; save(); renderSwatches(); renderDesigns(); renderVideoCard(); draw(); };
       box.appendChild(b);
     }
   }
   function updateLogoRow() {
     const k = curKey();
-    $('#logoPosRow').classList.toggle('hidden', !(k in KOY.DEFAULT_LOGO_POS));
+    $('#logoPosRow').classList.toggle('hidden', !(k in STUDIO.DEFAULT_LOGO_POS));
     $$('#logoPosSeg button').forEach(b => b.classList.toggle('on', b.dataset.pos === logoPosOf(k)));
   }
   $$('#logoPosSeg button').forEach(b => b.onclick = () => { C.logoPos[curKey()] = b.dataset.pos; S.prefs.logoPos = C.logoPos; save(); updateLogoRow(); renderDesigns(); draw(); });
 
   // video options: where it goes (story / reel), end card, sound
   function renderVideoCard() {
-    if (C.kind !== 'video') return;
+    if (kind() !== 'video') return;
     $$('#destSeg button').forEach(b => b.classList.toggle('on', b.dataset.dest === C.dest));
     $('#endCard').checked = C.endCard; $('#keepSound').checked = C.keepSound;
     const full = document.createElement('canvas');
-    KOY.render(full, Object.assign(state(), { photo: null, endAlpha: 1 }));
+    STUDIO.render(full, Object.assign(state(), { photo: null, endAlpha: 1 }));
     const t = $('#endThumb'); t.getContext('2d').drawImage(full, 0, 0, t.width, t.height);
     t.style.opacity = C.endCard ? '1' : '.35';
     const v = C.video;
     $('#videoLen').textContent = v
-      ? `אורך הסרטון: ${fmtSec(KOYVideo.limitOf(v))}${isFinite(v.duration) && v.duration > KOYVideo.MAX_SEC ? ' (רק 90 השניות הראשונות)' : ''}`
+      ? `אורך הסרטון: ${fmtSec(StudioVideo.limitOf(v))}${isFinite(v.duration) && v.duration > StudioVideo.MAX_SEC ? ' (רק 90 השניות הראשונות)' : ''}`
       : 'עד 90 שניות. סרטון ארוך יותר אפשר לקצר קודם בגלריה.';
   }
   $$('#destSeg button').forEach(b => b.onclick = () => { C.dest = b.dataset.dest; S.prefs.dest = C.dest; save(); renderVideoCard(); renderDesigns(); draw(); });
   $('#endCard').onchange = e => { C.endCard = e.target.checked; S.prefs.endCard = C.endCard; save(); renderVideoCard(); };
   $('#keepSound').onchange = e => { C.keepSound = e.target.checked; S.prefs.keepSound = C.keepSound; save(); };
 
+  // caption chips for photos and videos: her own phrases + her services
   function renderChips() {
     const box = $('#chips'); box.innerHTML = '';
-    const all = [['', 'בלי טקסט'], ...CHIPS.map(c => [c, c])];
+    const seen = new Set();
+    const all = [['', 'בלי טקסט'], ...[...S.biz.phrases, ...S.biz.services.slice(0, 4).map(s => B.SERVICE_CHIP(s.name)), cta()].filter(c => c && !seen.has(c) && seen.add(c)).map(c => [c, c])];
     for (const [val, label] of all) {
       const b = document.createElement('button');
       b.className = 'chip' + ((C.chip === val && !C.custom) ? ' on' : '');
@@ -231,72 +403,138 @@
     }
   }
   function renderTextCard() {
-    const noText = C.kind === 'post' && C.design.post === 'window';
-    $('#textCard').hidden = C.kind === 'slots';
+    const noText = kind() === 'post' && C.design.post === 'window';
     $('#chips').classList.toggle('hidden', noText);
     $('#customText').classList.toggle('hidden', noText);
+    $('#phEdit').classList.toggle('hidden', noText);
     $('#noTextNote').classList.toggle('hidden', !noText);
   }
   function renderSlotRows() {
     const box = $('#slotRows'); box.innerHTML = '';
     C.slots.forEach((v, i) => {
       const inp = document.createElement('input');
-      inp.className = 'field'; inp.style.marginBottom = '8px'; inp.maxLength = 28;
+      inp.className = 'field'; inp.style.marginBottom = '8px'; inp.maxLength = 30;
       inp.placeholder = `שורה ${i + 1}`; inp.value = v;
       inp.oninput = () => { C.slots[i] = inp.value; draw(); };
       box.appendChild(inp);
     });
   }
 
+  // ---------- forms of the data designs ----------
+  const PM_LABELS = ['מבצע', 'מבצע החודש', 'רק השבוע', 'חדש'];
+  const SHADES = B.SHADES || [];
+  function renderPricesForm() {
+    const box = $('#prList'), sv = S.biz.services.filter(s => s.name.trim());
+    if (!sv.length) { box.innerHTML = '<p class="fine"><b>עוד אין שירותים.</b> לחצי על "עריכת שירותים ומחירים" כדי להוסיף.</p>'; return; }
+    box.innerHTML = sv.map(s => `<label class="pick"><input type="checkbox" data-id="${s.id}" ${C.pr.off[s.id] ? '' : 'checked'}><span class="nm">${esc(s.name)}</span><span class="pr">${esc(fmtPrice(s.price) || '—')}</span></label>`).join('');
+    box.querySelectorAll('input').forEach(i => i.onchange = () => { if (i.checked) delete C.pr.off[i.dataset.id]; else C.pr.off[i.dataset.id] = true; saveDrafts(); draw(); });
+  }
+  function renderPromoForm() {
+    const lb = $('#pmLabels'); lb.innerHTML = '';
+    PM_LABELS.forEach(t => { const b = document.createElement('button'); b.className = 'chip' + (C.pm.label === t ? ' on' : ''); b.textContent = t; b.onclick = () => { C.pm.label = t; saveDrafts(); renderPromoForm(); draw(); }; lb.appendChild(b); });
+    $('#pmService').innerHTML = '<option value="">בחרי שירות (לא חובה)</option>' + S.biz.services.map(s => `<option value="${s.id}">${esc(s.name)}${s.price ? ' · ' + esc(fmtPrice(s.price)) : ''}</option>`).join('');
+    $('#pmService').value = svcById(C.pm.serviceId) ? C.pm.serviceId : '';
+  }
+  function renderShadeForm() {
+    const g = $('#shadeGrid'); if (!g) return; g.innerHTML = '';
+    SHADES.forEach(([c, n]) => { const b = document.createElement('button'); b.className = 'shade' + (C.sh.color.toLowerCase() === c.toLowerCase() ? ' on' : ''); b.style.background = c; b.title = n; b.setAttribute('aria-label', n); b.dataset.color = c;
+      b.onclick = () => { const prevPreset = SHADES.find(x => x[1] === C.sh.name.trim()); C.sh.color = c; if (!C.sh.name.trim() || prevPreset) { C.sh.name = n; $('#shName').value = n; } $('#shCustom').value = c; saveDrafts(); renderShadeForm(); draw(); }; g.appendChild(b); });
+  }
+  function renderTipForm() {
+    const box = $('#tipPresets'); box.innerHTML = '';
+    B.TIPS.forEach(([t, lines]) => { const b = document.createElement('button'); b.className = 'chip' + (C.tp.title === t ? ' on' : ''); b.textContent = t; b.onclick = () => { C.tp.title = t; C.tp.lines = lines.slice(); fillForms(); saveDrafts(); draw(); }; box.appendChild(b); });
+  }
+  function fillForms() {
+    $('#prTitle').value = C.pr.title; $('#prNote').value = C.pr.note;
+    $('#pmTitle').value = C.pm.title; $('#pmPrice').value = C.pm.price; $('#pmOld').value = C.pm.old; $('#pmValid').value = C.pm.valid;
+    if ($('#shName')) { $('#shName').value = C.sh.name; $('#shNote').value = C.sh.note; $('#shCustom').value = C.sh.color; }
+    $('#rvText').value = C.rv.text; $('#rvName').value = C.rv.name;
+    $('#tpTitle').value = C.tp.title; $$('.tpLine').forEach((el, i) => { el.value = C.tp.lines[i] || ''; });
+    $('#rvNames').innerHTML = S.clients.map(c => `<option value="${esc(c.name.split(' ')[0])}">`).join('');
+    renderPricesForm(); renderPromoForm(); renderShadeForm(); renderTipForm();
+  }
+  const bind = (sel, obj, field) => { const el = $(sel); if (el) el.oninput = e => { obj()[field] = e.target.value; saveDrafts(); draw(); }; };
+  bind('#prTitle', () => C.pr, 'title'); bind('#prNote', () => C.pr, 'note');
+  bind('#pmTitle', () => C.pm, 'title'); bind('#pmPrice', () => C.pm, 'price'); bind('#pmOld', () => C.pm, 'old'); bind('#pmValid', () => C.pm, 'valid');
+  bind('#shName', () => C.sh, 'name'); bind('#shNote', () => C.sh, 'note');
+  bind('#rvText', () => C.rv, 'text'); bind('#rvName', () => C.rv, 'name');
+  bind('#tpTitle', () => C.tp, 'title');
+  $$('.tpLine').forEach((el, i) => el.oninput = () => { C.tp.lines[i] = el.value; saveDrafts(); draw(); });
+  $('#pmService').onchange = e => {
+    C.pm.serviceId = e.target.value; const sv = svcById(C.pm.serviceId);
+    if (sv && sv.price && !C.pm.old.trim()) { C.pm.old = sv.price; $('#pmOld').value = sv.price; } // its regular price, to compare
+    saveDrafts(); draw();
+  };
+  if ($('#shCustom')) $('#shCustom').oninput = e => { C.sh.color = e.target.value; saveDrafts(); renderShadeForm(); draw(); };
+  // edit buttons right where she works
+  $('#prEdit').onclick = () => servicesSheet(() => { renderPricesForm(); draw(); });
+  $('#pmEdit').onclick = () => servicesSheet(() => { renderPromoForm(); draw(); });
+  $('#slEdit').onclick = () => hoursSheet(null);
+  $('#phEdit').onclick = () => phrasesSheet();
+
   // photo and video keep their own position and size
   const POS = { photo: { x: 0, y: 0, zoom: 1 }, video: { x: 0, y: 0, zoom: 1 } };
-  let posGroup = C.kind === 'video' ? 'video' : 'photo';
-  function switchPosGroup(kind) {
-    const g = kind === 'video' ? 'video' : 'photo';
+  let posGroup = kind() === 'video' ? 'video' : 'photo';
+  function switchPosGroup(k) {
+    const g = k === 'video' ? 'video' : 'photo';
     if (g === posGroup) return;
     POS[posGroup] = { x: C.x, y: C.y, zoom: C.zoom };
     posGroup = g; Object.assign(C, POS[g]); $('#zoom').value = C.zoom;
   }
-  function setKind(k) {
-    switchPosGroup(k);
-    C.kind = k; S.prefs.kind = k; save();
-    $$('#kindSeg button').forEach(b => b.classList.toggle('on', b.dataset.kind === k));
-    const isSlots = k === 'slots', isVid = k === 'video', m = media();
-    $('#uploadBox').hidden = isSlots || !!m;
-    $('#photoCard').hidden = isSlots || !m;
-    $('#dragHint').classList.toggle('hidden', isSlots || !m);
-    $('#designCard').hidden = isSlots;
+  function refreshUI() {
+    const k = kind(), isPhoto = PHOTO_KINDS.includes(k), isVid = k === 'video', isText = TEXT.includes(k), isSlots = k === 'slots';
+    const hasMedia = isPhoto || isVid, m = media();
+    $$('#typeGrid .type').forEach(b => b.classList.toggle('on', b.dataset.type === C.type));
+    $('#formatSeg').hidden = !(isPhoto || isText);
+    $$('#formatSeg button').forEach(b => b.classList.toggle('on', b.dataset.format === C.format));
+    if (!hasMedia) { clearTimeout(overlayT); $('#dragOverlay').classList.add('hidden'); } // the drag hint belongs to photos only
+    $('#uploadBox').hidden = !hasMedia || !!m;
+    $('#photoCard').hidden = !hasMedia || !m;
+    $('#dragHint').classList.toggle('hidden', !hasMedia || !m);
+    $('#designCard').hidden = !hasMedia;
     $('#videoCard').hidden = !isVid;
     $('#slotsCard').hidden = !isSlots;
-    $('#consentCard').hidden = isSlots;
+    $('#textCard').hidden = !hasMedia;
+    $('#consentCard').hidden = !(hasMedia || k === 'review');
+    TEXT.forEach(x => { const card = $('#' + x + 'Card'); if (card) card.hidden = k !== x; });
+    $('#consentText').textContent = k === 'review' ? 'הלקוחה אישרה לפרסם את ההמלצה' : isVid ? 'הלקוחה אישרה לפרסם את הסרטון' : 'הלקוחה אישרה לפרסם את התמונה';
     $('#fileInput').accept = isVid ? 'video/*' : 'image/*';
     $('#upTitle').textContent = isVid ? 'בחירת סרטון' : 'צילום או בחירת תמונה';
     $('#upSub').textContent = isVid ? 'מהגלריה או מהמצלמה, עד 90 שניות' : 'מהמצלמה או מהגלריה';
     $('#posTitle').textContent = isVid ? 'מיקום הסרטון' : 'מיקום התמונה';
     $('#changePhoto').textContent = isVid ? 'החלפת סרטון' : 'החלפת תמונה';
     $('#dragHint').textContent = `אפשר לגרור את ${isVid ? 'הסרטון' : 'התמונה'} עם האצבע, או להשתמש בחצים למטה`;
+    if (k === 'prices') renderPricesForm();
     renderDesigns(); renderTextCard(); updateLogoRow(); renderSwatches(); renderVideoCard(); draw(); ensureLoop();
   }
-  $$('#kindSeg button').forEach(b => b.onclick = () => setKind(b.dataset.kind));
+  function setType(t) {
+    // each kind of post needs its own consent (a photo's consent is not a review's)
+    if (t !== C.type) { $('#consent').checked = false; $('#clientSel').value = ''; }
+    C.type = t; S.prefs.type = t; save(); switchPosGroup(kind()); refreshUI();
+  }
+  function setFormat(f) { C.format = f; S.prefs.format = f; save(); switchPosGroup(kind()); refreshUI(); }
+  $$('#typeGrid .type').forEach(b => b.onclick = () => setType(b.dataset.type));
+  $$('#formatSeg button').forEach(b => b.onclick = () => setFormat(b.dataset.format));
 
   $('#fileInput').addEventListener('change', async e => {
     const f = e.target.files && e.target.files[0];
     if (!f) return;
-    const isVid = KOYVideo.isVideoFile(f);
+    const isVid = StudioVideo.isVideoFile(f);
     try {
       if (isVid) {
-        const v = await KOYVideo.loadVideo(f);
-        if (C.video) KOYVideo.unload(C.video);
+        const v = await StudioVideo.loadVideo(f);
+        if (C.video) StudioVideo.unload(C.video);
         C.video = v;
-        if (isFinite(v.duration) && v.duration > KOYVideo.MAX_SEC) toast('הסרטון ארוך מ-90 שניות, אז ייכנסו 90 השניות הראשונות');
+        if (isFinite(v.duration) && v.duration > StudioVideo.MAX_SEC) toast('הסרטון ארוך מ-90 שניות, אז ייכנסו 90 השניות הראשונות');
       } else {
-        C.photo = await KOY.loadPhoto(f);
+        C.photo = await STUDIO.loadPhoto(f);
       }
-      const target = isVid ? 'video' : (C.kind === 'video' || C.kind === 'slots' ? 'story' : C.kind);
-      switchPosGroup(target);
+      const t = isVid ? 'video' : 'photo';
+      C.type = t; S.prefs.type = t; save();
+      switchPosGroup(kind());
       C.x = 0; C.y = 0; C.zoom = 1; $('#zoom').value = 1; C.pendingBias = true;
       $('#consent').checked = false; $('#clientSel').value = '';
-      setKind(target);
+      refreshUI();
       showDragOverlay();
       $('#previewWrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (err) { toast(isVid ? 'לא הצלחתי לפתוח את הסרטון. נסי סרטון אחר.' : 'לא הצלחתי לפתוח את התמונה. נסי תמונה אחרת.'); }
@@ -323,7 +561,7 @@
     C.x = Math.max(-C.mx, Math.min(C.mx, C.x)); C.y = Math.max(-C.my, Math.min(C.my, C.y));
     if (C.x === bx && C.y === by && Date.now() - edgeToastAt > 2500) {
       edgeToastAt = Date.now();
-      toast(`${C.kind === 'video' ? 'הסרטון' : 'התמונה'} כבר בקצה. אפשר להגדיל או להקטין בסרגל "גודל"`);
+      toast(`${kind() === 'video' ? 'הסרטון' : 'התמונה'} כבר בקצה. אפשר להגדיל או להקטין בסרגל "גודל"`);
     }
     draw();
   }
@@ -337,7 +575,7 @@
 
   // drag + pinch on the preview
   const ptrs = new Map(); let pinch0 = null;
-  preview.addEventListener('pointerdown', e => { if (!media() || C.kind === 'slots') return; hideDragOverlay(); preview.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch0 = { d: Math.hypot(a.x - b.x, a.y - b.y), z: C.zoom }; } });
+  preview.addEventListener('pointerdown', e => { if (!media()) return; hideDragOverlay(); preview.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch0 = { d: Math.hypot(a.x - b.x, a.y - b.y), z: C.zoom }; } });
   preview.addEventListener('pointermove', e => {
     if (!ptrs.has(e.pointerId)) return;
     const prev = ptrs.get(e.pointerId); const cur = { x: e.clientX, y: e.clientY }; ptrs.set(e.pointerId, cur);
@@ -354,7 +592,12 @@
     sel.innerHTML = '<option value="">בלי לבחור לקוחה</option>' + [...S.clients].sort((a, b) => a.name.localeCompare(b.name, 'he')).map(c => `<option value="${c.id}">${esc(c.name)}${c.consent ? ' · אישרה פרסום' : ''}</option>`).join('');
     sel.value = cur && clientById(cur) ? cur : '';
   }
-  $('#clientSel').onchange = () => { const c = clientById($('#clientSel').value); if (c && c.consent) { $('#consent').checked = true; toast('האישור של ' + c.name + ' שמור אצלך ✓'); } updateSave(); };
+  $('#clientSel').onchange = () => {
+    const c = clientById($('#clientSel').value);
+    if (c && c.consent) { $('#consent').checked = true; toast('האישור של ' + c.name + ' שמור אצלך ✓'); }
+    if (c && kind() === 'review' && !C.rv.name.trim()) { C.rv.name = c.name.split(' ')[0]; $('#rvName').value = C.rv.name; saveDrafts(); draw(); }
+    updateSave();
+  };
   $('#consent').onchange = () => {
     const c = clientById($('#clientSel').value);
     if (c && $('#consent').checked && !c.consent) { c.consent = true; c.consentDate = keyOf(new Date()); save(); refreshClientSelect(); $('#clientSel').value = c.id; }
@@ -362,32 +605,42 @@
   };
 
   function updateSave() {
-    const btn = $('#saveBtn'), hint = $('#saveHint'), isVid = C.kind === 'video';
-    if (C.kind === 'slots') {
-      const any = C.slots.some(s => s.trim());
-      btn.disabled = !any; hint.textContent = any ? '' : 'כתבי לפחות תור פנוי אחד, או לחצי "מילוי אוטומטי מהיומן"';
-      return;
+    const btn = $('#saveBtn'), hint = $('#saveHint'), k = kind();
+    const set = (ok, msg) => { btn.disabled = !ok; hint.textContent = msg; };
+    const saved = 'העיצוב נשמר בטלפון שלך, ומשם מעלים לאינסטגרם';
+    if (k === 'slots') { const any = C.slots.some(s => s.trim()); return set(any, any ? saved : 'כתבי לפחות תור פנוי אחד, או לחצי "מילוי אוטומטי מהיומן"'); }
+    if (k === 'prices') { const n = priceItems().length; return set(n > 0, n ? saved : S.biz.services.length ? 'סמני לפחות שירות אחד' : 'קודם מוסיפים שירותים ומחירים'); }
+    if (k === 'promo') { const ok = !!(C.pm.title.trim() || svcById(C.pm.serviceId)); return set(ok, ok ? saved : 'כתבי כותרת או בחרי שירות'); }
+    if (k === 'shade') { const ok = !!C.sh.name.trim(); return set(ok, ok ? saved : 'כתבי את שם הגוון'); }
+    if (k === 'tip') { const ok = !!(C.tp.title.trim() || C.tp.lines.some(l => l.trim())); return set(ok, ok ? saved : 'כתבי כותרת לטיפ'); }
+    if (k === 'review') {
+      if (!C.rv.text.trim()) return set(false, 'כתבי את ההמלצה');
+      if (!$('#consent').checked) return set(false, 'כדי לשמור, סמני שהלקוחה אישרה לפרסם');
+      return set(true, saved);
     }
-    if (!media()) { btn.disabled = true; hint.textContent = isVid ? 'קודם בוחרים סרטון' : 'קודם בוחרים תמונה'; return; }
-    if (isVid && !CAN_VIDEO) { btn.disabled = true; hint.textContent = 'בטלפון הזה אי אפשר ליצור סרטון. כדאי לעדכן את הדפדפן או את המערכת.'; return; }
-    if (!$('#consent').checked) { btn.disabled = true; hint.textContent = 'כדי לשמור, סמני שהלקוחה אישרה לפרסם'; return; }
-    btn.disabled = false;
-    hint.textContent = isVid ? 'הסרטון נשמר בטלפון שלך, ומשם מעלים לסטורי או לריל' : 'התמונה נשמרת בטלפון שלך, ומשם מעלים לאינסטגרם';
+    const isVid = k === 'video';
+    if (!media()) return set(false, isVid ? 'קודם בוחרים סרטון' : 'קודם בוחרים תמונה');
+    if (isVid && !CAN_VIDEO) return set(false, 'בטלפון הזה אי אפשר ליצור סרטון. כדאי לעדכן את הדפדפן או את המערכת.');
+    if (!$('#consent').checked) return set(false, 'כדי לשמור, סמני שהלקוחה אישרה לפרסם');
+    set(true, isVid ? 'הסרטון נשמר בטלפון שלך, ומשם מעלים לסטורי או לריל' : saved);
   }
 
   $('#fillFromCal').onclick = () => {
+    if (![0, 1, 2, 3, 4, 5, 6].some(i => S.schedule[i].works) && !Object.values(S.overrides).some(o => o.on)) {
+      toast('עוד לא הגדרת ימי עבודה. לחצי על "עריכת ימים ושעות"'); return;
+    }
     const today = new Date(); const out = [];
-    for (let i = 0; i < 7 && out.length < 5; i++) {
+    for (let i = 0; i < 7 && out.length < 6; i++) {
       const d = addDays(today, i); const st = dayStatus(d);
       if (st.works) out.push(`${DAYS[d.getDay()]} ${dm(d)} · ${st.text}`);
     }
-    C.slots = [...out, '', '', '', '', ''].slice(0, 5);
+    C.slots = [...out, '', '', '', '', '', ''].slice(0, 6);
     renderSlotRows(); draw();
     toast(out.length ? 'מילאתי לפי ימי העבודה ביומן. אפשר לערוך.' : 'אין ימי עבודה ב-7 הימים הקרובים');
   };
 
   // ---- preview before saving ----
-  // photo: the finished image. video: it plays inside the design, then "create video" records it,
+  // photo or data design: the finished image. video: it plays inside the design, then "create video" records it,
   // then the finished video plays and can be saved. Files are prepared before the save tap, so the
   // share sheet opens instantly (phones only allow sharing right after a tap).
   let finalOut = null, recJob = null, fLoop = 0, fEndAt = 0;
@@ -422,19 +675,20 @@
 
   $('#saveBtn').onclick = async () => {
     if ($('#saveBtn').disabled) return;
-    if (C.kind === 'video') { openVideoPreview(); return; }
+    const k = kind();
+    if (k === 'video') { openVideoPreview(); return; }
     const out = document.createElement('canvas');
-    KOY.render(out, state());
+    STUDIO.render(out, state());
     const blob = await new Promise(r => out.toBlob(r, 'image/jpeg', 0.92));
     const now = new Date();
-    const name = `KOY_${C.kind}_${keyOf(now)}_${pad(now.getHours())}${pad(now.getMinutes())}.jpg`;
+    const name = `${B.FILE_PREFIX}_${k}${TEXT.includes(k) ? '_' + C.format : ''}_${keyOf(now)}_${pad(now.getHours())}${pad(now.getMinutes())}.jpg`;
     finalOut = { file: new File([blob], name, { type: 'image/jpeg' }), url: URL.createObjectURL(blob), name };
     $('#finalImg').src = finalOut.url;
     finalNote('');
     openFinal('photo');
   };
 
-  const readyNote = () => `הסרטון יהיה באורך ${fmtSec(KOYVideo.limitOf(C.video) + (C.endCard ? END_SEC : 0))}. ההכנה לוקחת בערך אותו זמן, והמסך צריך להישאר פתוח עד הסוף.`;
+  const readyNote = () => `הסרטון יהיה באורך ${fmtSec(StudioVideo.limitOf(C.video) + (C.endCard ? END_SEC : 0))}. ההכנה לוקחת בערך אותו זמן, והמסך צריך להישאר פתוח עד הסוף.`;
   function openVideoPreview() {
     openFinal('ready');
     finalNote(readyNote());
@@ -442,7 +696,7 @@
   }
   // plays the video in the design, then the end card, then again from the start
   function startFinalLoop() {
-    const v = C.video, cv = $('#finalCanvas'), lim = KOYVideo.limitOf(v);
+    const v = C.video, cv = $('#finalCanvas'), lim = StudioVideo.limitOf(v);
     v.loop = false; v.muted = true; v.currentTime = 0; v.play().catch(() => {}); fEndAt = 0;
     const step = () => {
       fLoop = 0;
@@ -454,7 +708,7 @@
       } else if (v.ended || v.currentTime >= lim - 0.03) {
         if (C.endCard) { v.pause(); fEndAt = performance.now(); } else { v.currentTime = 0; v.play().catch(() => {}); }
       }
-      KOY.render(cv, Object.assign(state(), { endAlpha: a }));
+      STUDIO.render(cv, Object.assign(state(), { endAlpha: a }));
       fLoop = requestAnimationFrame(step);
     };
     step();
@@ -466,9 +720,9 @@
     finalNote('המסך צריך להישאר פתוח עד הסוף.');
     const cv = $('#finalCanvas'), st0 = state();
     $('#finalBar').style.width = '0%'; $('#finalProgText').textContent = '0%';
-    const job = KOYVideo.record({
+    const job = StudioVideo.record({
       canvas: cv, video: C.video, keepAudio: C.keepSound, endSec: C.endCard ? END_SEC : 0,
-      draw: a => KOY.render(cv, Object.assign({}, st0, { endAlpha: a })),
+      draw: a => STUDIO.render(cv, Object.assign({}, st0, { endAlpha: a })),
       onProgress: p => { const pc = Math.round(p * 100); $('#finalBar').style.width = pc + '%'; $('#finalProgText').textContent = pc + '%'; },
     });
     recJob = job;
@@ -476,7 +730,7 @@
       if (job !== recJob) return;
       recJob = null;
       const now = new Date();
-      const name = `KOY_video_${keyOf(now)}_${pad(now.getHours())}${pad(now.getMinutes())}.${res.ext}`;
+      const name = `${B.FILE_PREFIX}_video_${keyOf(now)}_${pad(now.getHours())}${pad(now.getMinutes())}.${res.ext}`;
       finalOut = { file: new File([res.blob], name, { type: res.type }), url: URL.createObjectURL(res.blob), name, video: true };
       const fv = $('#finalVideo'); fv.src = finalOut.url; fv.muted = true; fv.play().catch(() => {});
       setFinalMode('done');
@@ -500,7 +754,7 @@
     const f = finalOut; if (!f) return;
     try {
       if (navigator.canShare && navigator.canShare({ files: [f.file] })) {
-        await navigator.share({ files: [f.file], title: 'KOY COSMETICS' });
+        await navigator.share({ files: [f.file], title: B.SHARE_TITLE });
         closeFinal(); toast(f.video ? 'מוכן! עכשיו אפשר להעלות לסטורי או לריל ✨' : 'מוכן! עכשיו אפשר להעלות לאינסטגרם ✨');
         return;
       }
@@ -517,7 +771,7 @@
   function dayStatus(d) {
     const k = keyOf(d), o = S.overrides[k], sch = S.schedule[d.getDay()];
     if (o && o.off) return { works: false, text: 'לא עובדת', manual: true };
-    if (o && o.on) return { works: true, text: hoursText(sch.works ? sch : { label: 'בתיאום' }), manual: true };
+    if (o && o.on) return { works: true, text: hoursText(sch.works ? sch : {}), manual: true };
     return sch.works ? { works: true, text: hoursText(sch) } : { works: false, text: 'לא עובדת' };
   }
   function renderCalendar() {
@@ -531,8 +785,8 @@
       el.className = 'day' + (k === todayK ? ' today' : '') + (st.works ? '' : ' off');
       el.innerHTML = `<div class="dayHead"><div><span class="dayName">${DAYS[d.getDay()]}</span><span class="dayDate">${dm(d)}</span></div>
         <button class="status" data-k="${k}" aria-label="שינוי יום עבודה">${st.works ? 'עובדת · ' + esc(st.text) : 'לא עובדת'}</button></div>
-        <div class="appts">${appts.map(a => { const c = clientById(a.clientId) || { name: a.name || 'לקוחה' };
-          return `<div class="appt" data-id="${a.id}"><span class="t">${esc(a.time || '')}</span><span class="n">${esc(c.name)}<br><span class="pl">${a.place === 'home' ? 'בבית הלקוחה' : 'אצלי'}${a.note ? ' · ' + esc(a.note) : ''}</span></span>${c.phone ? `<button class="wa" data-wa="${a.id}" aria-label="תזכורת בוואטסאפ">${WA_ICON}</button>` : ''}</div>`; }).join('')}</div>
+        <div class="appts">${appts.map(a => { const c = clientById(a.clientId) || { name: a.name || 'לקוחה' }; const sv = svcById(a.serviceId);
+          return `<div class="appt" data-id="${a.id}"><span class="t">${esc(a.time || '')}</span><span class="n">${esc(c.name)}<br><span class="pl">${sv ? esc(sv.name) : (a.place === 'home' ? 'בבית הלקוחה' : 'אצלי')}${a.note ? ' · ' + esc(a.note) : ''}</span></span>${c.phone ? `<button class="wa" data-wa="${a.id}" aria-label="תזכורת בוואטסאפ">${WA_ICON}</button>` : ''}</div>`; }).join('')}</div>
         <button class="btn ghost small addAppt" data-add="${k}">+ תור</button>`;
       box.appendChild(el);
     }
@@ -554,21 +808,22 @@
 
   function sendReminder(a) {
     const c = clientById(a.clientId); if (!c || !c.phone) return toast('אין מספר טלפון ללקוחה');
-    const d = parseKey(a.date), first = c.name.split(' ')[0];
-    const text = `היי ${first} 🤎\nתזכורת לתור שלך ביום ${DAYS[d.getDay()]} ${dm(d)}${a.time ? ' בשעה ' + a.time : ''}${a.place === 'home' ? ' (אצלך בבית)' : ''}.\nנתראה! קרן · KOY COSMETICS`;
+    const d = parseKey(a.date), first = c.name.split(' ')[0], sv = svcById(a.serviceId);
+    const text = `היי ${first} ${B.HEART}\nתזכורת לתור שלך${sv ? ' (' + sv.name + ')' : ''} ביום ${DAYS[d.getDay()]} ${dm(d)}${a.time ? ' בשעה ' + a.time : ''}${a.place === 'home' ? ' (אצלך בבית)' : ''}.\nנתראה! ${B.SIGN}`;
     window.open(waLink(c.phone, text), '_blank');
   }
 
   function apptForm(a, dateKey) {
-    const isNew = !a; a = a || { id: uid(), date: dateKey, time: '', place: 'studio', note: '', clientId: '' };
+    const isNew = !a; a = a || { id: uid(), date: dateKey, time: '', place: 'studio', note: '', clientId: '', serviceId: '' };
     const c = clientById(a.clientId);
     const sch = S.schedule[parseKey(a.date).getDay()];
-    const defTime = a.time || sch.from || '18:00';
+    const defTime = a.time || sch.from || '10:00';
     openSheet(`<h3>${isNew ? 'תור חדש' : 'עריכת תור'} · ${DAYS[parseKey(a.date).getDay()]} ${dm(parseKey(a.date))}</h3>
       <label class="f">שם הלקוחה</label><input class="field" id="aName" list="clientNames" value="${esc(c ? c.name : '')}" placeholder="שם">
       <datalist id="clientNames">${S.clients.map(x => `<option value="${esc(x.name)}">`).join('')}</datalist>
       <label class="f">טלפון</label><input class="field" id="aPhone" type="tel" inputmode="tel" value="${esc(c ? c.phone : '')}" placeholder="050-0000000">
       <label class="f">שעה</label><input class="field" id="aTime" type="time" value="${esc(defTime)}">
+      <label class="f">טיפול <span class="opt">(לא חובה)</span></label><select class="field" id="aSvc"><option value="">בלי לבחור</option>${S.biz.services.map(s => `<option value="${s.id}" ${s.id === a.serviceId ? 'selected' : ''}>${esc(s.name)}${s.price ? ' · ' + esc(fmtPrice(s.price)) : ''}</option>`).join('')}</select>
       <label class="f">איפה</label><div class="seg small" id="aPlace"><button data-p="studio" class="${a.place !== 'home' ? 'on' : ''}">אצלי</button><button data-p="home" class="${a.place === 'home' ? 'on' : ''}">בבית הלקוחה</button></div>
       <label class="f">הערה <span class="opt">(לא חובה)</span></label><input class="field" id="aNote" value="${esc(a.note)}" placeholder="למשל: לפני חתונה">
       <div class="actions"><button class="btn primary" id="aSave">שמירה</button>${isNew ? '' : '<button class="btn danger" id="aDel">מחיקה</button>'}<button class="btn ghost" id="aCancel">ביטול</button></div>`, sh => {
@@ -582,7 +837,7 @@
         let cl = S.clients.find(x => x.name === name);
         if (!cl) { cl = { id: uid(), name, phone, notes: '', consent: false, created: keyOf(new Date()) }; S.clients.push(cl); }
         else if (phone && !cl.phone) cl.phone = phone;
-        Object.assign(a, { clientId: cl.id, time: sh.querySelector('#aTime').value, place, note: sh.querySelector('#aNote').value.trim() });
+        Object.assign(a, { clientId: cl.id, time: sh.querySelector('#aTime').value, place, serviceId: sh.querySelector('#aSvc').value, note: sh.querySelector('#aNote').value.trim() });
         if (isNew) S.appts.push(a);
         save(); closeSheet(); renderCalendar(); toast('התור נשמר ✓');
       };
@@ -619,10 +874,10 @@
     openSheet(`<h3>${isNew ? 'לקוחה חדשה' : esc(c.name)}</h3>
       <label class="f">שם</label><input class="field" id="cName" value="${esc(c.name)}" placeholder="שם הלקוחה">
       <label class="f">טלפון</label><input class="field" id="cPhone" type="tel" inputmode="tel" value="${esc(c.phone)}" placeholder="050-0000000">
-      <label class="f">הערות <span class="opt">(גוון מועדף, אירוע, רגישויות)</span></label><textarea class="field" id="cNotes">${esc(c.notes)}</textarea>
-      <label class="check"><input type="checkbox" id="cConsent" ${c.consent ? 'checked' : ''}><span>מאשרת לפרסם תמונות שלה${c.consentDate ? ' (מ-' + dm(parseKey(c.consentDate)) + ')' : ''}</span></label>
+      <label class="f">הערות <span class="opt">(${esc(B.CLIENT_NOTES_HINT)})</span></label><textarea class="field" id="cNotes">${esc(c.notes)}</textarea>
+      <label class="check"><input type="checkbox" id="cConsent" ${c.consent ? 'checked' : ''}><span>מאשרת לפרסם תמונות והמלצות שלה${c.consentDate ? ' (מ-' + dm(parseKey(c.consentDate)) + ')' : ''}</span></label>
       ${!isNew && c.phone ? `<div class="actions"><a class="btn" href="${waLink(c.phone, '')}" target="_blank" rel="noopener">${WA_ICON} וואטסאפ</a><a class="btn" href="tel:${esc(c.phone.replace(/[^\d+]/g, ''))}">חיוג</a></div>` : ''}
-      ${hist.length ? `<label class="f">תורים</label><div class="hist">${hist.map(a => `<div>${DAYS[parseKey(a.date).getDay()]} ${dm(parseKey(a.date))}${a.time ? ' · ' + esc(a.time) : ''}${a.place === 'home' ? ' · בבית' : ''}${a.note ? ' · ' + esc(a.note) : ''}</div>`).join('')}</div>` : ''}
+      ${hist.length ? `<label class="f">תורים</label><div class="hist">${hist.map(a => { const sv = svcById(a.serviceId); return `<div>${DAYS[parseKey(a.date).getDay()]} ${dm(parseKey(a.date))}${a.time ? ' · ' + esc(a.time) : ''}${sv ? ' · ' + esc(sv.name) : ''}${a.note ? ' · ' + esc(a.note) : ''}</div>`; }).join('')}</div>` : ''}
       <div class="actions"><button class="btn primary" id="cSave">שמירה</button>${isNew ? '' : '<button class="btn danger" id="cDel">מחיקה</button>'}<button class="btn ghost" id="cCancel">ביטול</button></div>`, sh => {
       sh.querySelector('#cCancel').onclick = closeSheet;
       sh.querySelector('#cSave').onclick = () => {
@@ -639,32 +894,36 @@
   }
 
   // =====================================================================
-  // SETTINGS
+  // SETTINGS — everything about the business can be changed here, any time
   // =====================================================================
   function renderSettings() {
-    const box = $('#schedRows'); box.innerHTML = '';
-    for (let i = 0; i < 7; i++) {
-      const s = S.schedule[i];
-      const row = document.createElement('div'); row.className = 'sched';
-      row.innerHTML = `<input type="checkbox" ${s.works ? 'checked' : ''} aria-label="עובדת ביום ${DAYS[i]}"><span class="dn">${DAYS[i]}</span>
-        <input class="field from" type="time" value="${esc(s.from)}" aria-label="משעה" ${s.works ? '' : 'disabled'}>
-        <input class="field label" value="${esc(s.label)}" placeholder="או: בתיאום" maxlength="14" ${s.works ? '' : 'disabled'}>`;
-      const [cb, from, label] = row.querySelectorAll('input');
-      cb.onchange = () => { s.works = cb.checked; from.disabled = label.disabled = !cb.checked; save(); };
-      from.onchange = () => { s.from = from.value; save(); };
-      label.oninput = () => { s.label = label.value; save(); };
-      box.appendChild(row);
-    }
+    const n = S.biz.services.length;
+    $('#svcSummary').textContent = n ? S.biz.services.map(s => s.name + (s.price ? ' ' + fmtPrice(s.price) : '')).join(' · ') : 'עוד אין שירותים ומחירים.';
+    $('#phSummary').textContent = S.biz.phrases.length ? S.biz.phrases.join(' · ') : 'עוד אין משפטים מוכנים.';
+    $('#bizHandle').value = S.biz.handle; $('#bizPhone').value = S.biz.phone; $('#bizCta').value = cta();
+    renderCtaChips();
+    schedRows($('#schedRows'), S.schedule, true);
     $('#lastBackup').textContent = S.lastBackup ? `גיבוי אחרון: ${dm(parseKey(S.lastBackup))}` : 'עוד לא נשמר גיבוי';
     renderInstall();
   }
+  function renderCtaChips() {
+    const box = $('#ctaChips'); box.innerHTML = '';
+    ctaList(S.biz.phone).forEach(t => { const b = document.createElement('button'); b.className = 'chip' + (t === cta() ? ' on' : ''); b.textContent = t;
+      b.onclick = () => { S.biz.cta = t === STUDIO.CTA ? '' : t; save(); $('#bizCta').value = cta(); renderCtaChips(); renderChips(); }; box.appendChild(b); });
+  }
+  $('#svcBtn').onclick = () => servicesSheet(null);
+  $('#phBtn').onclick = () => phrasesSheet();
+  $('#bizHandle').oninput = e => { S.biz.handle = e.target.value.trim().replace(/^@/, ''); save(); };
+  $('#bizPhone').oninput = e => { S.biz.phone = e.target.value.trim(); save(); renderCtaChips(); };
+  $('#bizCta').oninput = e => { const v = e.target.value.trim(); S.biz.cta = v === STUDIO.CTA ? '' : v; save(); renderCtaChips(); renderChips(); };
+  $('#setupAgain').onclick = () => setupWizard();
 
   $('#exportBtn').onclick = async () => {
-    const data = JSON.stringify(Object.assign({}, S, { exported: new Date().toISOString(), app: 'KOY Studio' }), null, 1);
-    const name = `KOY-backup-${keyOf(new Date())}.json`;
+    const data = JSON.stringify(Object.assign({}, S, { exported: new Date().toISOString(), app: B.APP }), null, 1);
+    const name = `${B.FILE_PREFIX}-backup-${keyOf(new Date())}.json`;
     const file = new File([data], name, { type: 'application/json' });
     S.lastBackup = keyOf(new Date()); save(); renderSettings();
-    try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: 'גיבוי KOY Studio' }); toast('הגיבוי מוכן ✓'); return; } } catch (err) { if (err && err.name === 'AbortError') return; }
+    try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: 'גיבוי ' + B.APP }); toast('הגיבוי מוכן ✓'); return; } } catch (err) { if (err && err.name === 'AbortError') return; }
     const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = name; document.body.appendChild(a); a.click(); a.remove();
     toast('הגיבוי נשמר ✓');
   };
@@ -674,21 +933,21 @@
       const d = JSON.parse(await f.text());
       if (!d || !Array.isArray(d.clients) || !Array.isArray(d.appts)) throw new Error('bad');
       if (!(await confirmBox(`לשחזר גיבוי עם ${d.clients.length} לקוחות ו-${d.appts.length} תורים? זה יחליף את מה שיש עכשיו.`, 'שחזור'))) return;
-      S = Object.assign(fresh(), d); delete S.exported; delete S.app; save();
-      renderSettings(); refreshClientSelect(); toast('הגיבוי שוחזר ✓');
-    } catch (err) { toast('הקובץ הזה לא נראה כמו גיבוי של KOY Studio'); }
+      S = Object.assign(fresh(), d); S.biz = Object.assign(fresh().biz, d.biz); if (B.migrate) B.migrate(S, EMPTY_SCHEDULE); delete S.exported; delete S.app; save();
+      renderSettings(); refreshClientSelect(); afterBizChange(); toast('הגיבוי שוחזר ✓');
+    } catch (err) { toast('הקובץ הזה לא נראה כמו גיבוי של ' + B.APP); }
   };
   $('#wipeBtn').onclick = async () => {
-    if (!(await confirmBox('למחוק את כל הלקוחות והיומן מהטלפון?', 'כן, למחוק'))) return;
+    if (!(await confirmBox('למחוק את כל הלקוחות, היומן והמחירים מהטלפון?', 'כן, למחוק'))) return;
     if (!(await confirmBox('בטוח? אי אפשר לבטל את זה.', 'מחיקה סופית'))) return;
-    S = fresh(); save(); renderSettings(); refreshClientSelect(); toast('הכול נמחק');
+    S = fresh(); save(); renderSettings(); refreshClientSelect(); afterBizChange(); toast('הכול נמחק');
   };
 
   // ---------- install (home screen) ----------
   let installEvt = null;
   window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; renderInstall(); });
-  const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
-  const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
+  function isStandalone() { return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true; }
+  function isIOS() { return /iphone|ipad|ipod/i.test(navigator.userAgent); }
   function installHelp() {
     if (isStandalone()) return 'האפליקציה מותקנת ✓';
     if (isIOS()) return 'באייפון: לוחצים על כפתור השיתוף (ריבוע עם חץ) בספארי, ואז "הוספה למסך הבית".';
@@ -711,16 +970,25 @@
     const bb = $('#backupBanner');
     const hasData = S.clients.length || S.appts.length;
     const old = !S.lastBackup || (Date.now() - parseKey(S.lastBackup).getTime()) > 30 * 864e5;
+    bb.classList.add('hidden');
     if (hasData && old && !(S.dismiss.backup && Date.now() - S.dismiss.backup < 7 * 864e5)) {
       bb.innerHTML = `<span>הגיע הזמן לשמור גיבוי של הלקוחות והיומן. <b>הגדרות ← גיבוי</b></span><button aria-label="סגירה">×</button>`;
       bb.classList.remove('hidden');
       bb.querySelector('button').onclick = () => { S.dismiss.backup = Date.now(); save(); bb.classList.add('hidden'); };
     }
+    // no services yet: the price list and promotions need them
+    const sb = $('#setupBanner');
+    sb.classList.toggle('hidden', S.biz.services.length > 0);
+    if (!S.biz.services.length) {
+      sb.innerHTML = `<span>כדאי להוסיף את השירותים והמחירים שלך, כדי שהמחירון והמבצעים ייבנו לבד.</span><button class="btn small primary" id="setupBannerBtn">הוספה</button>`;
+      $('#setupBannerBtn').onclick = () => servicesSheet(null);
+    }
   }
 
   // ---------- start ----------
-  KOY.ready.then(() => {
-    renderChips(); renderSlotRows(); refreshClientSelect(); setKind(C.kind); banners();
+  STUDIO.ready.then(() => {
+    renderChips(); renderSlotRows(); refreshClientSelect(); fillForms(); refreshUI(); banners();
+    if (!S.biz.setupDone) setupWizard();
   });
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     // when a new version is published, reload once so the installed app picks it up
@@ -728,5 +996,5 @@
     navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !reloaded) { reloaded = true; location.reload(); } });
     window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').then(r => r.update()).catch(() => {}));
   }
-  window.__koy = { S: () => S, C };   // for automated tests only
+  window.__studio = { S: () => S, C };   // for automated tests only
 })();

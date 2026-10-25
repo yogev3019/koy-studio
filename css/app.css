@@ -1,4 +1,4 @@
-/* KOY Studio — Golden Hour palette, light background with dark text (D-021) */
+/* KOY Studio — Golden Hour palette, light background with dark text (D-021), Assistant (D-027). Same structure as AK Studio. */
 :root {
   --bg: #FFF8F1;
   --surface: #F5DCCB;
@@ -7,6 +7,7 @@
   --text: #3A2219;
   --line: #EADFD6;
   --white: #FFFFFF;
+  --edge: #D9A066;
   --sun: linear-gradient(180deg, #D9A066 0%, #9A5A33 100%);
   --radius: 18px;
   --safe-b: env(safe-area-inset-bottom, 0px);
@@ -65,13 +66,13 @@ h3 { font-size: 20px; font-weight: 700; margin: 0 0 10px; }
   padding: 12px 6px; font-size: 18px; font-weight: 600; cursor: pointer; color: var(--text);
 }
 .seg button.on { background: var(--primary); color: var(--bg); }
-#kindSeg button { flex: 1 1 auto; font-size: 17px; padding: 12px 4px; white-space: nowrap; }
+
 
 /* upload */
 .upload {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 4px; padding: 28px 16px; margin-bottom: 14px;
-  border: 2.5px dashed var(--accent); border-radius: 22px; background: var(--white);
+  border: 2.5px dashed var(--edge); border-radius: 22px; background: var(--white);
   cursor: pointer; text-align: center;
 }
 .upload b { font-size: 22px; }
@@ -115,7 +116,7 @@ input[type=range] { flex: 1; accent-color: var(--primary); height: 32px; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .chip {
-  border: 1.5px solid var(--accent); background: var(--bg); border-radius: 999px;
+  border: 1.5px solid var(--edge); background: var(--bg); border-radius: 999px;
   padding: 9px 14px; font-size: 16px; cursor: pointer;
 }
 .chip.on { background: var(--primary); border-color: var(--primary); color: var(--bg); }
@@ -124,7 +125,7 @@ input[type=range] { flex: 1; accent-color: var(--primary); height: 32px; }
   width: 100%; border: 1.5px solid var(--line); background: var(--bg); border-radius: 14px;
   padding: 13px 14px; font-size: 18px; outline: none;
 }
-.field:focus { border-color: var(--accent); }
+.field:focus { border-color: var(--primary); }
 textarea.field { min-height: 90px; resize: vertical; }
 .check { display: flex; align-items: center; gap: 12px; margin-top: 12px; font-size: 17px; cursor: pointer; }
 .check input { width: 26px; height: 26px; accent-color: var(--primary); flex: none; }
@@ -155,7 +156,7 @@ textarea.field { min-height: 90px; resize: vertical; }
 .weeknav { display: flex; align-items: center; justify-content: space-between; background: var(--white); border: 1px solid var(--line); border-radius: 999px; padding: 4px; margin-bottom: 8px; }
 .weeknav b { font-size: 19px; }
 .day { background: var(--white); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; margin-bottom: 12px; }
-.day.today { border: 2px solid var(--accent); }
+.day.today { border: 2px solid var(--edge); }
 .day.off { background: transparent; border-style: dashed; }
 .dayHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .dayName { font-size: 20px; font-weight: 700; }
@@ -262,7 +263,7 @@ textarea.field { min-height: 90px; resize: vertical; }
 }
 .posRow { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; }
 .pad { display: grid; grid-template-columns: repeat(3, 54px); grid-template-rows: repeat(3, 54px); gap: 6px; direction: ltr; flex: none; }
-.padBtn { border: 1.5px solid var(--accent); background: var(--bg); color: var(--primary); border-radius: 14px; font-size: 20px; font-weight: 700; cursor: pointer; touch-action: manipulation; }
+.padBtn { border: 1.5px solid var(--edge); background: var(--bg); color: var(--primary); border-radius: 14px; font-size: 20px; font-weight: 700; cursor: pointer; touch-action: manipulation; }
 .padBtn:active { background: var(--surface); }
 .padBtn.up { grid-column: 2; grid-row: 1; }
 .padBtn.left { grid-column: 1; grid-row: 2; }
@@ -285,3 +286,35 @@ textarea.field { min-height: 90px; resize: vertical; }
 .swatch.on span { font-weight: 700; color: var(--primary); }
 .logoPosRow { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
 .logoPosRow .seg { flex: 1; margin: 0; }
+
+/* AK Studio — create tiles, data forms, first-run setup */
+.types { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+.type {
+  border: 1.5px solid var(--line); background: var(--white); border-radius: 16px; padding: 10px 2px 8px;
+  display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 14px; cursor: pointer; color: var(--text);
+}
+.type svg { width: 30px; height: 30px; color: var(--primary); }
+.type.on { border-color: var(--primary); background: var(--surface); box-shadow: 0 0 0 1px var(--primary) inset; }
+.f2 { display: block; font-size: 15px; margin: 12px 0 6px; opacity: .85; }
+.two { display: flex; gap: 10px; }
+.two > div { flex: 1; }
+.ltrIn { direction: ltr; text-align: right; }
+.pick { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 17px; cursor: pointer; }
+.pick input { width: 24px; height: 24px; accent-color: var(--primary); flex: none; }
+.pick .nm { flex: 1; }
+.pick .pr { direction: ltr; color: var(--primary); }
+.shades { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px 10px; margin-bottom: 6px; }
+.shade { aspect-ratio: 3 / 5; border: none; padding: 0; cursor: pointer; border-radius: 50% 50% 42% 42% / 64% 64% 36% 36%; box-shadow: inset 0 6px 8px rgba(255, 255, 255, .55), 0 2px 6px rgba(58, 34, 25, .15); }
+.shade.on { outline: 3px solid var(--primary); outline-offset: 3px; }
+#shCustom { width: 44px; height: 32px; border: none; background: none; padding: 0; }
+.svcRow { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.svcRow .nm { flex: 1; }
+.svcRow .pr { width: 96px; flex: none; }
+.svcRow .del { width: 40px; height: 40px; flex: none; border-radius: 50%; border: 1.5px solid var(--line); background: var(--bg); color: var(--primary); font-size: 22px; cursor: pointer; }
+.steps { display: flex; gap: 6px; margin-bottom: 14px; }
+.steps i { flex: 1; height: 5px; border-radius: 9px; background: var(--line); }
+.steps i.on { background: var(--primary); }
+.sched .to { width: 104px; flex: none; }
+.sched .from { width: 104px; }
+.sched .dash { opacity: .6; }
+.instList { margin: 8px 0 0; padding-inline-start: 22px; line-height: 1.8; }
